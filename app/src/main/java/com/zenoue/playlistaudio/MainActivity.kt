@@ -31,6 +31,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var speed: EditText
     private lateinit var group: EditText
     private lateinit var run: Button
+    private lateinit var mono: android.widget.CheckBox
 
     private val prefs by lazy { getSharedPreferences("last", Context.MODE_PRIVATE) }
 
@@ -45,6 +46,7 @@ class MainActivity : AppCompatActivity() {
         speed = findViewById(R.id.speed)
         group = findViewById(R.id.group)
         run = findViewById(R.id.run)
+        mono = findViewById(R.id.mono)
         val status = findViewById<TextView>(R.id.status)
         val log = findViewById<TextView>(R.id.log)
         val progress = findViewById<LinearProgressIndicator>(R.id.progress)
@@ -64,6 +66,7 @@ class MainActivity : AppCompatActivity() {
         trimEnd.setText(prefs.getString("trimEnd", "30"))
         speed.setText(prefs.getString("speed", "1.25"))
         group.setText(prefs.getString("group", "10"))
+        mono.isChecked = prefs.getBoolean("mono", true)
         handleShare(intent)
 
         run.setOnClickListener {
@@ -86,7 +89,7 @@ class MainActivity : AppCompatActivity() {
                 launch {
                     JobState.running.collect {
                         run.text = if (it) "Dừng" else "Bắt đầu"
-                        listOf(url, from, count, trimStart, trimEnd, speed, group).forEach { v -> v.isEnabled = !it }
+                        listOf(url, from, count, trimStart, trimEnd, speed, group, mono).forEach { v -> v.isEnabled = !it }
                     }
                 }
                 launch {
@@ -122,6 +125,7 @@ class MainActivity : AppCompatActivity() {
                 trimEnd = Params.parseTime(trimEnd.text.toString()),
                 speed = speed.text.toString().replace(',', '.').ifBlank { "1" }.toDouble(),
                 group = group.text.toString().ifBlank { "10" }.toInt().coerceAtLeast(1),
+                mono = mono.isChecked,
             )
         } catch (e: Exception) {
             return toast("Giá trị nhập không hợp lệ")
@@ -133,7 +137,7 @@ class MainActivity : AppCompatActivity() {
             .putString("url", link).putString("from", from.text.toString())
             .putString("count", count.text.toString()).putString("trimStart", trimStart.text.toString())
             .putString("trimEnd", trimEnd.text.toString()).putString("speed", speed.text.toString())
-            .putString("group", group.text.toString()).apply()
+            .putString("group", group.text.toString()).putBoolean("mono", mono.isChecked).apply()
 
         ContextCompat.startForegroundService(
             this, Intent(this, ProcessService::class.java).putExtras(params.toBundle())

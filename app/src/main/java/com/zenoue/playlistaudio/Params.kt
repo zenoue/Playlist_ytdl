@@ -10,19 +10,22 @@ data class Params(
     val trimEnd: Double,   // giây
     val speed: Double,
     val group: Int,
-    val bitrateK: Int = 128,
+    val mono: Boolean = true,
 ) {
+    /** Mono 64k: mã hoá nhanh hơn ~40%, file nhẹ một nửa, đủ cho giọng đọc. */
+    val bitrateK get() = if (mono) 64 else 128
+
     fun toBundle() = Bundle().apply {
         putString("url", url); putInt("from", from); putInt("count", count)
         putDouble("trimStart", trimStart); putDouble("trimEnd", trimEnd)
-        putDouble("speed", speed); putInt("group", group); putInt("bitrateK", bitrateK)
+        putDouble("speed", speed); putInt("group", group); putBoolean("mono", mono)
     }
 
     companion object {
         fun from(b: Bundle) = Params(
             b.getString("url")!!, b.getInt("from"), b.getInt("count"),
             b.getDouble("trimStart"), b.getDouble("trimEnd"),
-            b.getDouble("speed"), b.getInt("group"), b.getInt("bitrateK", 128),
+            b.getDouble("speed"), b.getInt("group"), b.getBoolean("mono", true),
         )
 
         /** "75", "1:15", "0:01:15" -> giây */

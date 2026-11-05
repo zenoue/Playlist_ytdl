@@ -88,6 +88,13 @@
             </com.google.android.material.textfield.TextInputLayout>
         </LinearLayout>
 
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/mono"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="Mono 64kbps (nhanh hơn, file nhẹ hơn – hợp truyện/giọng đọc)" />
+
         <com.google.android.material.button.MaterialButton
             android:id="@+id/run"
             android:layout_width="match_parent"
