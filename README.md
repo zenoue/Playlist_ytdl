@@ -1,20 +1,28 @@
-# Playlist YT → MP3 (cắt intro/outro, tăng tốc, gộp)
+# Playlist Audio (Android)
 
-Chạy trên GitHub Actions: tải audio từ video/playlist YouTube → cắt đoạn đầu/cuối → tăng tốc → gộp mỗi 10 audio thành 1 file mp3.
+App Android: dán link playlist YouTube → tải audio → **cắt đầu / cắt cuối** → **tăng tốc** → **gộp mỗi N video thành 1 file mp3**. Mọi thứ chạy trên điện thoại (dùng mạng của máy nên không bị YouTube chặn như máy chủ).
+
+## Tải APK
+Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-arm64-v8a-vN.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
+
+Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có thể cài đè bản mới lên bản cũ.
 
 ## Dùng
-1. Điền URL vào `urls.txt` (hoặc nhập trực tiếp ở ô `url` khi chạy). Mỗi dòng: `URL [cắt_đầu] [cắt_cuối]`, cho phép cắt riêng từng video/playlist.
-2. Tab **Actions** → **YouTube -> MP3** → **Run workflow**, nhập: cắt đầu, cắt cuối, tốc độ, số file gộp.
-3. Tải kết quả ở mục **Artifacts** của lần chạy (giữ 30 ngày), hoặc tick `release` để đăng lên Releases.
+| Ô | Ý nghĩa |
+|---|---|
+| Link | link playlist hoặc video (có thể bấm *Chia sẻ* trong app YouTube → chọn Playlist Audio) |
+| Từ video số / Số video | vd 1 và 10 = 10 video đầu; số video = 0 → tới hết playlist |
+| Cắt đầu / Cắt cuối | giây (`10`) hoặc phút:giây (`1:05`) |
+| Tốc độ | `1.25`, `1.5`, `2`… |
+| Gộp mỗi N video | mặc định 10 |
 
-## Lỗi "Sign in to confirm you're not a bot"
-IP của GitHub Actions hay bị YouTube chặn. Cách xử lý:
-1. Dùng extension xuất cookies dạng Netscape (vd "Get cookies.txt LOCALLY") khi đang đăng nhập youtube.com — nên dùng tài khoản phụ.
-2. Repo → Settings → Secrets and variables → Actions → New secret tên `YT_COOKIES`, dán toàn bộ nội dung cookies.txt.
-3. Cookies có thể hết hạn sau vài ngày, khi đó xuất lại.
+Kết quả: `Download/PlaylistAudio/<tên playlist>_01_v1-10.mp3`, …
 
-## Chạy local
-```bash
-pip install -U "yt-dlp[default]"   # cần thêm ffmpeg và deno
-python process.py --url "https://www.youtube.com/playlist?list=..." --trim-start 0:15 --trim-end 20 --speed 1.5 --group-size 10
-```
+- Chạy nền có thông báo, tắt màn hình vẫn chạy; bấm *Dừng* trên thông báo để huỷ.
+- Bị ngắt giữa chừng → bấm Bắt đầu lại với **cùng tham số**, các video đã xử lý được giữ lại, không tải lại.
+- Mỗi lần chạy app tự cập nhật yt-dlp mới nhất.
+
+## Kỹ thuật
+- [youtubedl-android](https://github.com/yausername/youtubedl-android) 0.18.1: đóng gói Python + yt-dlp + ffmpeg + QuickJS (JS runtime yt-dlp cần cho YouTube từ 2025.11).
+- Xử lý: `ffmpeg -ss <đầu> -t <dài - đầu - cuối> -af atempo=<tốc độ> -c:a libmp3lame`, gộp bằng concat demuxer (`-c copy`).
+- `app/release.keystore` là khoá ký công khai chỉ để các bản build cài đè được lên nhau — **không dùng để phát hành lên Play Store**.

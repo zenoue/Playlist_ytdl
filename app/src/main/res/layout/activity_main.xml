@@ -1,0 +1,122 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Link playlist / video YouTube">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/url"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:inputType="textUri"
+                android:maxLines="3" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <LinearLayout style="@style/Row">
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Từ video số">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/from"
+                    style="@style/Num"
+                    android:inputType="number" />
+            </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Số video (0 = hết)">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/count"
+                    style="@style/Num"
+                    android:inputType="number" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <LinearLayout style="@style/Row">
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Cắt đầu (giây / m:ss)">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/trimStart"
+                    style="@style/Num"
+                    android:inputType="text" />
+            </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Cắt cuối (giây / m:ss)">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/trimEnd"
+                    style="@style/Num"
+                    android:inputType="text" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <LinearLayout style="@style/Row">
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Tốc độ (vd 1.25)">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/speed"
+                    style="@style/Num"
+                    android:inputType="numberDecimal" />
+            </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Gộp mỗi N video">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/group"
+                    style="@style/Num"
+                    android:inputType="number" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/run"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Bắt đầu" />
+
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progress"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:max="1000" />
+
+        <TextView
+            android:id="@+id/status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:alpha="0.7"
+            android:text="File kết quả lưu ở: Download/PlaylistAudio"
+            android:textSize="12sp" />
+
+        <TextView
+            android:id="@+id/log"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:fontFamily="monospace"
+            android:textIsSelectable="true"
+            android:textSize="11sp" />
+    </LinearLayout>
+</ScrollView>
