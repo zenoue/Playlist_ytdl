@@ -36,6 +36,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".TagActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
+
         <service
             android:name=".ProcessService"
             android:exported="false"

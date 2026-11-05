@@ -1,0 +1,163 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/scroll"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:fillViewport="true">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:padding="16dp">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="12dp"
+            android:text="Gắn ảnh bìa + thông tin"
+            android:textAppearance="?attr/textAppearanceHeadlineSmall" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pickFile"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="1. Chọn file mp3" />
+
+        <TextView
+            android:id="@+id/fileName"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:alpha="0.7"
+            android:textSize="12sp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="2. Ảnh bìa lấy từ…"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/coverSrc"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+            <RadioButton
+                android:id="@+id/srcYt"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:checked="true"
+                android:text="Link YouTube" />
+            <RadioButton
+                android:id="@+id/srcImg"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Ảnh trong máy" />
+            <RadioButton
+                android:id="@+id/srcNone"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Giữ nguyên" />
+        </RadioGroup>
+
+        <LinearLayout
+            android:id="@+id/ytBox"
+            style="@style/Row">
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:layout_weight="3"
+                android:hint="Link video / playlist">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/ytLink"
+                    style="@style/Num"
+                    android:inputType="textUri" />
+            </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Video số">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/ytIndex"
+                    style="@style/Num"
+                    android:inputType="number" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/pickImg"
+            style="@style/Widget.Material3.Button.OutlinedButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Chọn ảnh"
+            android:visibility="gone" />
+
+        <ImageView
+            android:id="@+id/preview"
+            android:layout_width="160dp"
+            android:layout_height="90dp"
+            android:layout_marginTop="8dp"
+            android:scaleType="centerCrop" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="3. Thông tin"
+            android:textStyle="bold" />
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Tên bài">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/title"
+                style="@style/Num" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <com.google.android.material.textfield.TextInputLayout
+            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:hint="Album">
+            <com.google.android.material.textfield.TextInputEditText
+                android:id="@+id/album"
+                style="@style/Num" />
+        </com.google.android.material.textfield.TextInputLayout>
+
+        <LinearLayout style="@style/Row">
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:layout_weight="3"
+                android:hint="Nghệ sĩ / kênh">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/artist"
+                    style="@style/Num" />
+            </com.google.android.material.textfield.TextInputLayout>
+            <com.google.android.material.textfield.TextInputLayout
+                style="@style/Field"
+                android:hint="Số thứ tự">
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/track"
+                    style="@style/Num"
+                    android:inputType="text" />
+            </com.google.android.material.textfield.TextInputLayout>
+        </LinearLayout>
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/write"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="Ghi vào file" />
+
+        <TextView
+            android:id="@+id/tagStatus"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:textIsSelectable="true" />
+    </LinearLayout>
+</ScrollView>

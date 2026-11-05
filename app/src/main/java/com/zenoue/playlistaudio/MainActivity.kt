@@ -69,6 +69,10 @@ class MainActivity : AppCompatActivity() {
         mono.isChecked = prefs.getBoolean("mono", true)
         handleShare(intent)
 
+        findViewById<Button>(R.id.openTag).setOnClickListener {
+            startActivity(Intent(this, TagActivity::class.java).putExtra("link", url.text.toString().trim()))
+        }
+
         run.setOnClickListener {
             if (JobState.running.value) {
                 startService(Intent(this, ProcessService::class.java).setAction(ProcessService.ACTION_STOP))
