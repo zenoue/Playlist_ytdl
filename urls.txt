@@ -1,0 +1,5 @@
+# Mỗi dòng: URL [cắt_đầu] [cắt_cuối]   (giây hoặc mm:ss; bỏ trống = dùng mặc định của workflow)
+# URL có thể là video lẻ hoặc cả playlist. Thứ tự dòng = thứ tự trong file gộp.
+# Ví dụ:
+# https://www.youtube.com/playlist?list=PLxxxxxxxx
+# https://www.youtube.com/watch?v=xxxxxxxxxxx 0:20 0:45
