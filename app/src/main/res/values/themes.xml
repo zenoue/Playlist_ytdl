@@ -1,5 +1,5 @@
 <resources>
-    <style name="Theme.PlaylistAudio" parent="Theme.Material3.DayNight">
+    <style name="Theme.PlaylistAudio" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="colorPrimary">#C62828</item>
         <item name="colorOnPrimary">#FFFFFF</item>
     </style>

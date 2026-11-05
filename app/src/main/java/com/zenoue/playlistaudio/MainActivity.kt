@@ -13,6 +13,8 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -47,6 +49,13 @@ class MainActivity : AppCompatActivity() {
         val log = findViewById<TextView>(R.id.log)
         val progress = findViewById<LinearProgressIndicator>(R.id.progress)
         val scroll = findViewById<ScrollView>(R.id.scroll)
+
+        // Android 15 vẽ tràn viền: chừa chỗ cho thanh trạng thái / thanh điều hướng / bàn phím
+        ViewCompat.setOnApplyWindowInsetsListener(scroll) { v, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            insets
+        }
 
         url.setText(prefs.getString("url", ""))
         from.setText(prefs.getString("from", "1"))
