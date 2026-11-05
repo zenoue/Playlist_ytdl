@@ -18,8 +18,9 @@ Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có th
 
 Kết quả: `Download/PlaylistAudio/<tên playlist>_01_v1-10.mp3`, …
 
+- Tối ưu tốc độ: tải song song 4 video (hiện tốc độ MB/s) → chia mỗi video thành nhiều đoạn, mã hoá MP3 song song trên **tất cả nhân CPU** → ghép bằng copy (không mã hoá lại). Nhật ký ghi thời gian từng giai đoạn.
 - Chạy nền có thông báo, tắt màn hình vẫn chạy; bấm *Dừng* trên thông báo để huỷ.
-- Bị ngắt giữa chừng → bấm Bắt đầu lại với **cùng tham số**, các video đã xử lý được giữ lại, không tải lại.
+- Bị ngắt giữa chừng → bấm Bắt đầu lại với cùng link, các video đã tải được giữ lại, không tải lại (đổi cắt/tốc độ cũng không phải tải lại).
 - Mỗi lần chạy app tự cập nhật yt-dlp mới nhất.
 
 ## Kỹ thuật
