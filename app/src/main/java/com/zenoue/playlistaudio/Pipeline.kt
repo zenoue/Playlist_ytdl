@@ -85,14 +85,16 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             addOption("--yes-playlist")
             addOption("--ignore-errors")
             addOption("--cache-dir", ytCache.absolutePath)
-            addOption("--print", "%(playlist_title|)s\t%(id)s\t%(title)s")
+            addOption("--print", "%(playlist_title|)s\t%(id)s\t%(title)s\t%(playlist_uploader|)s")
             addOption("-I", if (p.count > 0) "${p.from}:${p.from + p.count - 1}" else "${p.from}:")
         }
         val listOut = ytExec(listReq, "list") { _, _ -> }.out
         var playlistTitle = ""
+        var uploader = ""
         val entries = listOut.lines().filter { it.contains('\t') }.mapIndexed { i, line ->
             val f = line.split('\t')
             if (playlistTitle.isEmpty()) playlistTitle = f[0]
+            if (uploader.isEmpty()) uploader = f.getOrElse(3) { "" }
             Entry(i, p.from + i, f[1], f.getOrElse(2) { f[1] })
         }
         if (entries.isEmpty()) throw Exception("Không tìm thấy video nào. Kiểm tra lại link.")
@@ -129,7 +131,27 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             val listFile = File(dir, "concat.txt")
             listFile.writeText(parts.joinToString("") { "file '${it.out.absolutePath.replace("'", "'\\''")}'\n" })
             val merged = File(dir, "merged.mp3")
-            ffmpeg(listOf("-f", "concat", "-safe", "0", "-i", listFile.absolutePath, "-c", "copy", merged.absolutePath))
+            val cover = makeCover(dir, entries[vids.first()].index)
+            val album = playlistTitle.ifBlank { entries[vids.first()].title }
+            val args = mutableListOf("-f", "concat", "-safe", "0", "-i", listFile.absolutePath)
+            if (cover != null) args += listOf("-i", cover.absolutePath, "-map", "0:a", "-map", "1:v")
+            args += listOf("-c", "copy", "-id3v2_version", "3",
+                "-metadata", "title=${String.format(Locale.US, "%0${width}d", g + 1)}. ${entries[vids.first()].title}" +
+                    (if (vids.size > 1) " → ${entries[vids.last()].title}" else ""),
+                "-metadata", "album=$album",
+                "-metadata", "artist=${uploader.ifBlank { album }}",
+                "-metadata", "track=${g + 1}/${groups.size}",
+                "-metadata", "genre=Audiobook")
+            if (cover != null) args += listOf("-disposition:v", "attached_pic",
+                "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)")
+            args += merged.absolutePath
+            try {
+                ffmpeg(args)
+            } catch (e: Exception) {
+                if (cancelled || cover == null) throw e
+                log("Không gắn được ảnh bìa, gộp không ảnh: ${e.message?.take(200)}")
+                ffmpeg(listOf("-f", "concat", "-safe", "0", "-i", listFile.absolutePath, "-c", "copy", merged.absolutePath))
+            }
             saved += export(merged, name)
             merged.delete()
             progress(0.95 + 0.05 * (g + 1) / groups.size)
@@ -271,6 +293,9 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             addOption("--progress")  // --print bật chế độ quiet; vẫn cần dòng tiến độ
             addOption("--newline")
             addOption("--print", "after_move:RESULT\t%(duration)s\t%(filepath)s")
+            // Ảnh thumbnail làm ảnh bìa (lỗi thumbnail chỉ là cảnh báo, không làm hỏng việc tải)
+            addOption("--write-thumbnail")
+            addOption("-o", "thumbnail:" + File(dir, "thumb_${e.index}.%(ext)s").absolutePath)
         }
         val resp = ytExec(req, "dl-${e.n}") { pct, line -> onProgress(pct / 100.0, line) }
         val line = resp.out.lines().lastOrNull { it.startsWith("RESULT\t") }
@@ -362,6 +387,23 @@ class Pipeline(private val ctx: Context, private val p: Params) {
     }
 
     // ================= ffmpeg =================
+
+    /** Thumbnail (webp/jpg) -> jpg 640px làm ảnh bìa. Không có thì trả null. */
+    private fun makeCover(dir: File, index: Int): File? {
+        val src = dir.listFiles()?.firstOrNull {
+            it.name.startsWith("thumb_$index.") && !it.name.endsWith(".part")
+        } ?: return null
+        val out = File(dir, "cover_$index.jpg")
+        if (out.exists()) return out
+        return try {
+            ffmpeg(listOf("-i", src.absolutePath, "-frames:v", "1", "-vf", "scale=640:-2", "-q:v", "3", out.absolutePath))
+            out
+        } catch (e: Exception) {
+            if (cancelled) throw e
+            log("Không tạo được ảnh bìa: ${e.message?.take(150)}")
+            null
+        }
+    }
 
     private fun libDir() = File(ctx.applicationInfo.nativeLibraryDir)
 

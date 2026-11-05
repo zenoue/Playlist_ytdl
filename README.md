@@ -16,7 +16,9 @@ Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có th
 | Tốc độ | `1.25`, `1.5`, `2`… |
 | Gộp mỗi N video | mặc định 10 |
 
-Kết quả: `Download/PlaylistAudio/<tên playlist>_01_v1-10.mp3`, …
+Kết quả: `Download/PlaylistAudio/<tên playlist>_01_v1-10.mp3`, … kèm **ảnh bìa** (thumbnail video đầu nhóm) và tag album/tên/số phần để app nghe nhạc nhóm đúng.
+
+App nghe gợi ý (nhẹ, không quảng cáo, nhớ vị trí đang nghe): **Voice** (F-Droid), **Musicolet** (Play Store).
 
 - Tối ưu tốc độ: tải song song 4 video (hiện tốc độ MB/s) → chia mỗi video thành nhiều đoạn, mã hoá MP3 song song trên **tất cả nhân CPU** → ghép bằng copy (không mã hoá lại). Nhật ký ghi thời gian từng giai đoạn.
 - Chạy nền có thông báo, tắt màn hình vẫn chạy; bấm *Dừng* trên thông báo để huỷ.
