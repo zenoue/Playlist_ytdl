@@ -69,7 +69,7 @@ def read_jobs(args):
     return jobs
 
 
-def download(jobs, dl_dir: Path, cookies: str | None, bitrate: str):
+def download(jobs, dl_dir: Path, cookies: str | None, bitrate: str, items: str = ""):
     dl_dir.mkdir(parents=True, exist_ok=True)
     for i, (url, _, _) in enumerate(jobs):
         cmd = ["yt-dlp", "-x", "--audio-format", "mp3", "--audio-quality", bitrate,
@@ -79,6 +79,8 @@ def download(jobs, dl_dir: Path, cookies: str | None, bitrate: str):
                "-o", str(dl_dir / f"{i:03d}_%(playlist_index|0)04d_%(id)s.%(ext)s")]
         if cookies:
             cmd += ["--cookies", cookies]
+        if items:
+            cmd += ["--playlist-items", items]
         cmd.append(url)
         # --ignore-errors: 1 video lỗi không làm hỏng cả batch
         subprocess.run(cmd)
@@ -117,6 +119,7 @@ def main():
     ap.add_argument("--bitrate", default="128k")
     ap.add_argument("--prefix", default="part", help="tiền tố tên file output")
     ap.add_argument("--cookies", default=None, help="cookies.txt (Netscape) cho YouTube")
+    ap.add_argument("--items", default="", help="chọn video trong playlist, vd 1:10 hoặc 1,3,5-7")
     ap.add_argument("--work", default="work")
     ap.add_argument("--out", default="output")
     ap.add_argument("--skip-download", action="store_true", help="dùng file đã có trong work/downloads")
@@ -135,7 +138,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
 
     if not args.skip_download:
-        download(jobs, dl_dir, args.cookies, args.bitrate.rstrip("k") + "K")
+        download(jobs, dl_dir, args.cookies, args.bitrate.rstrip("k") + "K", args.items)
 
     srcs = sorted(dl_dir.glob("*.mp3"))
     if not srcs:

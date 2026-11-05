@@ -7,6 +7,10 @@ on:
         description: "URL video/playlist (cách nhau bởi dấu cách). Để trống = đọc urls.txt"
         required: false
         default: ""
+      items:
+        description: "Chọn video trong playlist (vd 1:10 = 10 video đầu). Trống = tất cả"
+        required: false
+        default: ""
       trim_start:
         description: "Cắt đầu (giây hoặc mm:ss)"
         default: "0"
@@ -68,7 +72,7 @@ jobs:
           python process.py --url "$URL" \
             --trim-start "${{ inputs.trim_start }}" --trim-end "${{ inputs.trim_end }}" \
             --speed "${{ inputs.speed }}" --group-size "${{ inputs.group_size }}" \
-            --bitrate "${{ inputs.bitrate }}" $COOKIE_ARG
+            --bitrate "${{ inputs.bitrate }}" --items "${{ inputs.items }}" $COOKIE_ARG
           rm -f cookies.txt
 
       - uses: actions/upload-artifact@v4
