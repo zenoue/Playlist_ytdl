@@ -144,11 +144,16 @@ class Pipeline(private val ctx: Context, private val p: Params) {
 
     private fun downloadAll(entries: List<Entry>, dir: File): List<Raw> {
         val total = entries.size
-        val conc = minOf(4, total)
+        val conc = minOf(MAX_PARALLEL_DOWNLOADS, total)
         val t0 = System.currentTimeMillis()
         val frac = ConcurrentHashMap<Int, Double>()
-        val speed = ConcurrentHashMap<Int, Double>() // bytes/s
+        val speed = ConcurrentHashMap<Int, Double>()       // bytes/s hiện tại của từng luồng
+        val flowingSince = ConcurrentHashMap<Int, Long>()  // lúc luồng (lần thử hiện tại) bắt đầu có dữ liệu
+        val slowSince = ConcurrentHashMap<Int, Long>()
+        val restartReq = ConcurrentHashMap<Int, Double>()  // n -> tốc độ lúc bị đánh giá chậm
+        val finishedRates = Collections.synchronizedList(mutableListOf<Double>())
         val done = AtomicInteger()
+        val restarts = AtomicInteger()
         val results = arrayOfNulls<Raw>(total)
         var lastUi = 0L
 
@@ -158,45 +163,96 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             lastUi = now
             val f = (done.get() + frac.values.sum()) / total
             progress(f * 0.45)
-            JobState.status.value = "Tải ${done.get()}/$total · ${human(speed.values.sum())}/s · ${frac.size} luồng"
+            JobState.status.value = "Tải ${done.get()}/$total · ${human(speed.values.sum())}/s · ${frac.size} luồng" +
+                (if (restarts.get() > 0) " · tải lại ${restarts.get()}" else "")
         }
+
+        // Canh gác: luồng nào bị YouTube bóp tốc độ (chậm hẳn so với các luồng khác) -> huỷ và tải lại.
+        // yt-dlp tự nối tiếp file .part nên không mất phần đã tải.
+        val watchdog = Executors.newSingleThreadScheduledExecutor().also { pools += it }
+        watchdog.scheduleWithFixedDelay({
+            try {
+                val now = System.currentTimeMillis()
+                val active = speed.filterKeys { frac.containsKey(it) }
+                val ref = max(median(active.values.toList()), median(synchronized(finishedRates) { finishedRates.toList() }))
+                if (ref <= 0) return@scheduleWithFixedDelay
+                for ((n, sp) in active) {
+                    val since = flowingSince[n] ?: continue
+                    val fr = frac[n] ?: continue
+                    val slow = now - since > THROTTLE_WARMUP_MS && fr < 0.8 && sp < ref * THROTTLE_RATIO
+                    if (!slow) { slowSince.remove(n); continue }
+                    val s0 = slowSince.getOrPut(n) { now }
+                    if (now - s0 >= THROTTLE_HOLD_MS && !restartReq.containsKey(n)) {
+                        restartReq[n] = sp
+                        runCatching { YoutubeDL.getInstance().destroyProcessById("dl-$n") }
+                    }
+                }
+            } catch (_: Exception) { }
+        }, 1, 1, java.util.concurrent.TimeUnit.SECONDS)
 
         status("Tải $total video ($conc luồng song song)…")
         val pool = newPool(conc)
         val futures = entries.map { e ->
             pool.submit {
                 if (cancelled) return@submit
-                val tag = "[${e.n + 1}/$total]"
+                val n = e.n
+                val tag = "[${n + 1}/$total]"
                 val t1 = System.currentTimeMillis()
                 try {
                     val cached = File(dir, "raw_${e.index}.done")
-                    val raw = if (cached.exists()) {
+                    var raw = if (cached.exists()) {
                         val (d, path) = cached.readText().split('\t', limit = 2)
                         Raw(e, File(path), d.toDouble()).takeIf { it.file.exists() }
                     } else null
-                    results[e.n] = raw ?: download(e, dir) { pct, line ->
-                        frac[e.n] = pct
-                        parseSpeed(line)?.let { speed[e.n] = it }
-                        ui()
-                    }.also { cached.writeText("${it.duration}\t${it.file.absolutePath}") }
-                    val sizeMb = results[e.n]!!.file.length() / 1048576.0
+                    var attempt = 0
+                    while (raw == null) {
+                        if (cancelled) throw CancelledByUser()
+                        flowingSince.remove(n); slowSince.remove(n); speed.remove(n)
+                        try {
+                            raw = download(e, dir) { pct, line ->
+                                frac[n] = pct
+                                parseSpeed(line)?.let {
+                                    speed[n] = it
+                                    flowingSince.putIfAbsent(n, System.currentTimeMillis())
+                                }
+                                ui()
+                            }
+                        } catch (ex: Exception) {
+                            val sp = restartReq.remove(n)
+                            if (cancelled || sp == null) throw ex
+                            attempt++
+                            restarts.incrementAndGet()
+                            log("$tag Luồng bị bóp (${human(sp)}/s) → tải lại lần $attempt")
+                            if (attempt >= MAX_RESTARTS) {
+                                log("$tag Đã tải lại $attempt lần, để luồng này chạy tiếp")
+                                // lần cuối: không cho canh gác huỷ nữa
+                                flowingSince.remove(n); speed.remove(n)
+                                raw = download(e, dir) { pct, line -> frac[n] = pct; parseSpeed(line)?.let { speed[n] = it }; ui() }
+                            }
+                        }
+                    }
+                    cached.writeText("${raw.duration}\t${raw.file.absolutePath}")
+                    results[n] = raw
+                    val sizeMb = raw.file.length() / 1048576.0
+                    finishedRates += raw.file.length() / max(secs(t1), 0.1)
                     log(String.format(Locale.US, "%s Tải xong %.1fMB trong %.1fs: %s",
                         tag, sizeMb, secs(t1), e.title))
                 } catch (ex: Exception) {
                     if (!cancelled) log("$tag LỖI tải, bỏ qua: ${ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(300)}")
                 } finally {
-                    frac.remove(e.n); speed.remove(e.n)
+                    frac.remove(n); speed.remove(n); flowingSince.remove(n); slowSince.remove(n)
                     done.incrementAndGet(); ui(true)
                 }
             }
         }
         futures.forEach { runCatching { it.get() } }
         pool.shutdown()
+        watchdog.shutdownNow()
         checkCancel()
         val ok = results.filterNotNull()
         val mb = ok.sumOf { it.file.length() } / 1048576.0
-        log(String.format(Locale.US, "Tải xong %d/%d video, %.0fMB trong %.1fs (TB %s/s)",
-            ok.size, total, mb, secs(t0), human(mb * 1048576 / max(secs(t0), 0.1))))
+        log(String.format(Locale.US, "Tải xong %d/%d video, %.0fMB trong %.1fs (TB %s/s, tải lại %d lần)",
+            ok.size, total, mb, secs(t0), human(mb * 1048576 / max(secs(t0), 0.1)), restarts.get()))
         return ok
     }
 
@@ -376,6 +432,18 @@ class Pipeline(private val ctx: Context, private val p: Params) {
     }
 
     companion object {
+        const val MAX_PARALLEL_DOWNLOADS = 10
+        const val MAX_RESTARTS = 3
+        const val THROTTLE_WARMUP_MS = 8_000L   // bỏ qua mấy giây đầu (tốc độ chưa ổn định)
+        const val THROTTLE_HOLD_MS = 6_000L     // chậm liên tục bấy lâu mới tải lại
+        const val THROTTLE_RATIO = 0.4          // chậm hơn 40% tốc độ chuẩn = bị bóp
+
+        fun median(xs: List<Double>): Double {
+            if (xs.isEmpty()) return 0.0
+            val s = xs.sorted()
+            return if (s.size % 2 == 1) s[s.size / 2] else (s[s.size / 2 - 1] + s[s.size / 2]) / 2
+        }
+
         fun fmt(d: Double) = String.format(Locale.US, "%.3f", d)
 
         /** atempo an toàn: tách thành chuỗi hệ số trong [0.5, 2.0]. */
