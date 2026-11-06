@@ -40,7 +40,18 @@ class Pipeline(private val ctx: Context, private val p: Params) {
 
     private data class Entry(val n: Int, val index: Int, val id: String, val title: String, val listDuration: Double)
     private data class Raw(val entry: Entry, val file: File, val duration: Double)
-    private data class Seg(val raw: Raw, val part: Int, val start: Double, val len: Double, val out: File)
+
+    // ----- Chống bị YouTube chặn bot -----
+    /** Đã gặp lỗi "Sign in to confirm you're not a bot": dừng gửi yêu cầu mới (gửi tiếp chỉ làm bị chặn nặng hơn). */
+    @Volatile private var botBlocked = false
+    private fun isBot(msg: String?) = msg?.contains("not a bot") == true || msg?.contains("Sign in to confirm") == true
+    /** Chỉ cho tối đa EXTRACT_PARALLEL video cùng lúc ở bước lấy thông tin (bước gửi nhiều request tới YouTube). */
+    private val extractSem = java.util.concurrent.Semaphore(EXTRACT_PARALLEL)
+    /** cookies.txt (Netscape) lấy từ đăng nhập YouTube trong app; mỗi tiến trình yt-dlp dùng 1 bản sao riêng. */
+    private val cookieSrc = CookieStore.file(ctx).takeIf { it.exists() && it.length() > 0 }
+    private fun cookieCopy(tag: String): File? = cookieSrc?.let { src ->
+        File(ctx.cacheDir, "ck_$tag.txt").also { src.copyTo(it, overwrite = true) }
+    }
 
     fun cancel() {
         cancelled = true
@@ -104,7 +115,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             .isSuccess
         ariaExe = if (ariaOk) setupAriaLink() else null
         log(String.format(Locale.US, "Khởi tạo: %.1fs", secs(tAll)))
-        log("CPU: $cores nhân")
+        log("CPU: $cores nhân · " + if (cookieSrc != null) "dùng cookies YouTube đã đăng nhập" else "chưa đăng nhập YouTube")
 
         // Kiểm tra cập nhật yt-dlp tối đa 1 lần / 12 giờ
         if (System.currentTimeMillis() - prefs.getLong("ytdlpUpdate", 0) > 12 * 3600_000L) {
@@ -127,6 +138,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             addOption("--yes-playlist")
             addOption("--ignore-errors")
             addOption("--cache-dir", ytCache.absolutePath)
+            cookieCopy("list")?.let { addOption("--cookies", it.absolutePath) }
             addOption("--print", "%(playlist_title|)s\t%(id)s\t%(title)s\t%(playlist_uploader|)s\t%(duration|0)s")
             addOption("-I", if (p.count > 0) "${p.from}:${p.from + p.count - 1}" else "${p.from}:")
         }
@@ -149,75 +161,83 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         val dir = File(work, key).apply { mkdirs() }
         work.listFiles()?.filter { it.name != key }?.forEach { it.deleteRecursively() }
 
-        // Mã hoá chạy CHỒNG với tải: video nào tải xong là đem đi cắt + tăng tốc ngay trên các nhân rảnh,
-        // không chờ tải hết -> tổng thời gian ≈ max(tải, mã hoá) thay vì tải + mã hoá.
-        val enc = if (p.copyMode) null else Encoder(dir, entries)
-        val raws = downloadAll(entries, dir, ariaOk) { raw -> enc?.submit(raw) }
+        // ===== 1. Tải (giữ nguyên định dạng YouTube trả về) =====
+        val raws = downloadAll(entries, dir, ariaOk)
         checkCancel()
-        if (raws.isEmpty()) throw Exception("Không tải được video nào")
-        enc?.downloadsDone()
-        val segs = enc?.finish() ?: emptyList()
-        checkCancel()
+        if (raws.isEmpty()) throw Exception(
+            if (botBlocked) "YouTube đang chặn (bắt xác minh bot). Bấm \"Đăng nhập YouTube\" rồi chạy lại, hoặc đổi mạng (wifi ↔ 4G)."
+            else "Không tải được video nào")
 
-        // ---------- Gộp (copy, không mã hoá lại) + lưu ----------
-        val byVideo: Map<Int, List<Seg>> = segs.groupBy { it.raw.entry.n }
-        val rawByN = raws.associateBy { it.entry.n }
-        val videos = (if (p.copyMode) raws.filter { keepOf(it) > 1 }.map { it.entry.n } else byVideo.keys.toList()).sorted()
-        if (videos.isEmpty()) throw Exception("Không còn video nào sau khi cắt")
-        val groups = videos.chunked(p.group)
+        val valid = raws.filter { keepOf(it) > 1 }.sortedBy { it.entry.n }
+        raws.filter { keepOf(it) <= 1 }.forEach {
+            log("[${it.entry.n + 1}] Bỏ qua: video dài ${it.duration.toInt()}s, cắt xong không còn gì")
+        }
+        if (valid.isEmpty()) throw Exception("Không còn video nào sau khi cắt")
+        val groups = valid.chunked(p.group)
         val width = max(2, groups.size.toString().length)
         val base = sanitize(playlistTitle.ifBlank { entries.first().title }).take(60)
-        // Chế độ không mã hoá giữ nguyên định dạng gốc: m4a (AAC) có ảnh bìa; opus -> .opus (không ảnh bìa)
-        val srcExt = rawByN[videos.first()]!!.file.extension.lowercase()
-        val (ext, mime) = when {
-            !p.copyMode -> "mp3" to "audio/mpeg"
-            srcExt == "webm" || srcExt == "opus" || srcExt == "ogg" -> "opus" to "audio/ogg"
-            else -> "m4a" to "audio/mp4"
-        }
         val saved = mutableListOf<String>()
+
         for ((g, vids) in groups.withIndex()) {
             checkCancel()
-            val first = entries[vids.first()].index
-            val last = entries[vids.last()].index
-            val name = "${base}_${String.format(Locale.US, "%0${width}d", g + 1)}_v$first-$last.$ext"
-            status("Gộp + lưu ${g + 1}/${groups.size}")
-            val listFile = File(dir, "concat.txt")
-            listFile.writeText(
-                if (p.copyMode) vids.joinToString("") { v ->
-                    val r = rawByN[v]!!
-                    "file '${q(r.file)}'\ninpoint ${fmt(p.trimStart)}\noutpoint ${fmt(r.duration - p.trimEnd)}\n"
-                } else vids.flatMap { v -> byVideo[v]!!.sortedBy { it.part } }.joinToString("") { "file '${q(it.out)}'\n" }
-            )
-            val merged = File(dir, "merged.$ext")
-            val cover = if (ext == "opus") null else makeCover(dir, entries[vids.first()].index)
-            val album = playlistTitle.ifBlank { entries[vids.first()].title }
-            val args = mutableListOf("-f", "concat", "-safe", "0", "-i", listFile.absolutePath)
+            val first = vids.first().entry; val last = vids.last().entry
+            val tg = System.currentTimeMillis()
+
+            // ===== 2. Cắt + ghép KHÔNG mã hoá: concat demuxer với inpoint/outpoint, -c copy =====
+            status("Cắt + ghép ${g + 1}/${groups.size} (không mã hoá)…")
+            val listFile = File(dir, "concat_$g.txt")
+            listFile.writeText(vids.joinToString("") { r ->
+                "file '${q(r.file)}'\ninpoint ${fmt(p.trimStart)}\noutpoint ${fmt(r.duration - p.trimEnd)}\n"
+            })
+            // Matroska nhận mọi codec (opus/aac) và tua chính xác -> làm file trung gian
+            val joined = File(dir, "joined_$g.mka")
+            ffmpeg(listOf("-f", "concat", "-safe", "0", "-i", listFile.absolutePath, "-map", "0:a", "-c", "copy", joined.absolutePath))
+            val joinedDur = vids.sumOf { keepOf(it) }
+            log(String.format(Locale.US, "Ghép %d video (%.0f phút) không mã hoá: %.1fs",
+                vids.size, joinedDur / 60, secs(tg)))
+
+            // ===== 3. Tốc độ: chỉ đổi được khi mã hoá lại (giải mã -> atempo -> mã hoá) =====
+            val codec = probeCodec(joined)
+            val (ext, mime) = when {
+                !p.copyMode -> "mp3" to "audio/mpeg"
+                codec == "aac" -> "m4a" to "audio/mp4"
+                codec == "opus" -> "opus" to "audio/ogg"
+                codec == "mp3" -> "mp3" to "audio/mpeg"
+                else -> "mka" to "audio/x-matroska"
+            }
+            val audio: File = if (p.copyMode) joined else speedUp(joined, joinedDur, dir, g, groups.size)
+
+            // ===== 4. Ảnh bìa + thông tin (copy) =====
+            val name = "${base}_${String.format(Locale.US, "%0${width}d", g + 1)}_v${first.index}-${last.index}.$ext"
+            val out = File(dir, "final_$g.$ext")
+            val cover = if (ext == "opus" || ext == "mka") null else makeCover(dir, first.index)
+            val album = playlistTitle.ifBlank { first.title }
+            val args = mutableListOf("-i", audio.absolutePath)
             if (cover != null) args += listOf("-i", cover.absolutePath, "-map", "0:a", "-map", "1:v")
             else args += listOf("-map", "0:a")
             args += listOf("-c", "copy")
             if (ext == "mp3") args += listOf("-id3v2_version", "3")
             args += listOf(
-                "-metadata", "title=${String.format(Locale.US, "%0${width}d", g + 1)}. ${entries[vids.first()].title}" +
-                    (if (vids.size > 1) " → ${entries[vids.last()].title}" else ""),
+                "-metadata", "title=${String.format(Locale.US, "%0${width}d", g + 1)}. ${first.title}" +
+                    (if (vids.size > 1) " → ${last.title}" else ""),
                 "-metadata", "album=$album",
                 "-metadata", "artist=${uploader.ifBlank { album }}",
                 "-metadata", "track=${g + 1}/${groups.size}",
                 "-metadata", "genre=Audiobook")
             if (cover != null) args += listOf("-disposition:v", "attached_pic",
                 "-metadata:s:v", "title=Album cover", "-metadata:s:v", "comment=Cover (front)")
-            args += merged.absolutePath
-            val tg = System.currentTimeMillis()
+            args += out.absolutePath
             try {
                 ffmpeg(args)
             } catch (e: Exception) {
                 if (cancelled || cover == null) throw e
-                log("Không gắn được ảnh bìa, gộp không ảnh: ${e.message?.take(200)}")
-                ffmpeg(listOf("-f", "concat", "-safe", "0", "-i", listFile.absolutePath, "-map", "0:a", "-c", "copy", merged.absolutePath))
+                log("Không gắn được ảnh bìa: ${e.message?.take(200)}")
+                ffmpeg(listOf("-i", audio.absolutePath, "-map", "0:a", "-c", "copy", out.absolutePath))
             }
-            log(String.format(Locale.US, "Gộp %d: %.1fs", g + 1, secs(tg)))
-            saved += export(merged, name, mime)
-            merged.delete()
-            progress(0.95 + 0.05 * (g + 1) / groups.size)
+            saved += export(out, name, mime)
+            out.delete(); joined.delete(); if (audio != joined) audio.delete()
+            log(String.format(Locale.US, "Phần %d xong: %.1fs", g + 1, secs(tg)))
+            progress(0.45 + 0.55 * (g + 1) / groups.size)
         }
         dir.deleteRecursively()
         progress(1.0)
@@ -227,7 +247,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
 
     // ================= Giai đoạn 1: tải song song =================
 
-    private fun downloadAll(entries: List<Entry>, dir: File, ariaOk: Boolean, onDone: (Raw) -> Unit): List<Raw> {
+    private fun downloadAll(entries: List<Entry>, dir: File, ariaOk: Boolean): List<Raw> {
         val total = entries.size
         val conc = minOf(MAX_PARALLEL_DOWNLOADS, total)
         val t0 = System.currentTimeMillis()
@@ -246,10 +266,10 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             val now = System.currentTimeMillis()
             if (!force && now - lastUi < 400) return
             lastUi = now
-            dlFrac = (done.get() + frac.values.sum()) / total
-            dlStatus = "Tải ${done.get()}/$total · ${human(speed.values.sum())}/s" +
+            val dlFrac = (done.get() + frac.values.sum()) / total
+            progress(dlFrac * 0.45)
+            JobState.status.value = "Tải ${done.get()}/$total · ${human(speed.values.sum())}/s" +
                 (if (restarts.get() > 0) " · tải lại ${restarts.get()}" else "")
-            showProgress()
         }
 
         // Canh gác: luồng nào bị YouTube bóp tốc độ (chậm hẳn so với các luồng khác) -> huỷ và tải lại.
@@ -295,11 +315,16 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                     while (raw == null) {
                         var extracted = false
                         if (cancelled) throw CancelledByUser()
+                        if (botBlocked) throw Exception("bỏ qua vì YouTube đang chặn bot")
+                        extractSem.acquire()
+                        var semHeld = true
+                        fun releaseSem() { if (semHeld) { semHeld = false; extractSem.release() } }
                         flowingSince.remove(n); slowSince.remove(n); speed.remove(n)
                         try {
                             raw = download(e, dir, useAria, fast) { pct, line ->
                                 if (line.contains("@@EXTRACTED")) {
                                     extracted = true
+                                    releaseSem() // đã lấy xong thông tin -> nhường lượt cho video khác
                                     if (attempt == 0) log(String.format(Locale.US, "%s Lấy thông tin: %.1fs%s",
                                         tag, secs(t1), if (fast) "" else " (chế độ đầy đủ)"))
                                     return@download
@@ -311,16 +336,24 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                                 }
                                 ui()
                             }
+                            releaseSem()
                         } catch (ex: Exception) {
+                            releaseSem()
                             val sp = restartReq.remove(n)
                             val why = ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(150)
+                            if (!cancelled && isBot(ex.message)) {
+                                if (!botBlocked) log("$tag YouTube bắt xác minh bot → dừng gửi yêu cầu mới" +
+                                    if (cookieSrc == null) ". Hãy bấm \"Đăng nhập YouTube\"." else " (cookies có thể đã hết hạn, đăng nhập lại).")
+                                botBlocked = true
+                                throw Exception("YouTube chặn bot")
+                            }
                             if (!cancelled && sp == null && !extracted && fast) {
                                 fast = false
                                 disableFast()
                                 log("$tag Lấy thông tin nhanh lỗi ($why) → chế độ đầy đủ")
                                 continue
                             }
-                            if (!cancelled && sp == null && useAria) {
+                            if (!cancelled && sp == null && useAria && extracted) {
                                 useAria = false
                                 log("$tag aria2c lỗi (${ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(120)}) → dùng trình tải thường")
                                 continue
@@ -339,7 +372,6 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                     }
                     cached.writeText("${raw.duration}\t${raw.file.absolutePath}")
                     results[n] = raw
-                    onDone(raw)
                     val sizeMb = raw.file.length() / 1048576.0
                     finishedRates += raw.file.length() / max(secs(t1), 0.1)
                     log(String.format(Locale.US, "%s Tải xong %.1fMB (%s) trong %.1fs: %s",
@@ -355,7 +387,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         futures.forEach { runCatching { it.get() } }
         pool.shutdown()
         watchdog.shutdownNow()
-        dlFrac = 1.0; dlStatus = ""
+
         checkCancel()
         val ok = results.filterNotNull()
         val mb = ok.sumOf { it.file.length() } / 1048576.0
@@ -374,6 +406,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             })
             addOption("--no-playlist")
             addOption("--cache-dir", ytCache.absolutePath)
+            cookieCopy("dl${e.n}")?.let { addOption("--cookies", it.absolutePath) }
             addOption("--no-mtime")
             addOption("--retries", "10")
             addOption("--fragment-retries", "10")
@@ -422,114 +455,70 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             ytIds -= id
         }
 
-    // ================= Giai đoạn 2: mã hoá song song mọi nhân (chồng với tải) =================
+    // ================= Tăng tốc 1 file đã ghép: chia đều cho mọi nhân =================
 
     private fun keepOf(r: Raw) = r.duration - p.trimStart - p.trimEnd
 
-    // Trạng thái hiển thị chung cho tải + mã hoá đang chạy song song
-    @Volatile private var dlFrac = 0.0
-    @Volatile private var dlStatus = ""
-    @Volatile private var encFrac = 0.0
-    @Volatile private var encStatus = ""
-    private fun showProgress() {
-        progress(if (p.copyMode) dlFrac * 0.95 else dlFrac * 0.45 + encFrac * 0.5)
-        JobState.status.value = listOf(dlStatus, encStatus).filter { it.isNotEmpty() }.joinToString(" | ")
+    private fun probeCodec(f: File): String {
+        val pb = ProcessBuilder(File(libDir(), "libffmpeg.so").absolutePath, "-hide_banner", "-i", f.absolutePath)
+            .redirectErrorStream(true)
+        env(pb)
+        val text = pb.start().let { pr -> pr.inputStream.bufferedReader().readText().also { pr.waitFor() } }
+        return Regex("Audio: (\\w+)").find(text)?.groupValues?.get(1) ?: ""
     }
 
-    private inner class Encoder(private val dir: File, entries: List<Entry>) {
-        // Chia mỗi video thành nhiều đoạn (~3 đoạn/nhân trên tổng khối lượng) để mọi nhân luôn bận.
-        private val estKeep = entries.sumOf { max(0.0, it.listDuration - p.trimStart - p.trimEnd) }
-        private val target = max(180.0, estKeep / (cores * 3))
-        private var totalOut = max(1.0, estKeep / p.speed)
-        private val pool = newPool(cores)
-        // Trong lúc còn tải: chỉ dùng 1/4 số nhân để yt-dlp (Python + QuickJS giải thử thách) và aria2c
-        // không bị tranh CPU -> tải không chậm đi. Tải xong mới mở hết các nhân.
-        private val busyPermits = max(1, cores / 4)
-        private val sem = java.util.concurrent.Semaphore(busyPermits)
-        @Volatile private var opened = false
-        fun downloadsDone() {
-            if (!opened) { opened = true; sem.release(cores - busyPermits) }
-        }
-        private val futures = Collections.synchronizedList(mutableListOf<java.util.concurrent.Future<*>>())
-        private val segs = Collections.synchronizedList(mutableListOf<Seg>())
-        private val doneSec = ConcurrentHashMap<Seg, Double>()
-        private val pending = ConcurrentHashMap<Raw, AtomicInteger>()
-        private var t0 = 0L
-        @Volatile private var lastUi = 0L
-        // mono: đổi sang mono 24kHz TRƯỚC atempo -> atempo + LAME xử lý ít mẫu hơn (~20% nhanh hơn)
-        private val filter = if (p.mono) "aformat=channel_layouts=mono,aresample=24000,${atempo(p.speed)}" else atempo(p.speed)
-
-        private fun ui() {
-            val now = System.currentTimeMillis()
-            if (now - lastUi < 400) return
-            lastUi = now
-            val d = doneSec.values.sum()
-            encFrac = (d / totalOut).coerceAtMost(1.0)
-            encStatus = String.format(Locale.US, "Xử lý %.0f%% · %.0fx", 100 * encFrac, d / max(secs(t0), 0.1))
-            showProgress()
-        }
-
-        fun submit(r: Raw) {
-            val keep = keepOf(r)
-            if (keep <= 1) {
-                log("[${r.entry.n + 1}] Bỏ qua: video dài ${r.duration.toInt()}s, cắt xong không còn gì")
-                return
-            }
-            if (t0 == 0L) t0 = System.currentTimeMillis()
-            val k = max(1, ceil(keep / target).toInt())
-            val len = keep / k
-            val mine = (0 until k).map { j ->
-                Seg(r, j, p.trimStart + j * len, len,
-                    File(dir, String.format(Locale.US, "seg_%04d_%03d.mp3", r.entry.index, j)))
-            }
-            segs += mine
-            pending[r] = AtomicInteger(k)
-            for (s in mine) futures += pool.submit {
+    /**
+     * File đã ghép -> chia thành N đoạn bằng nhau (N = số nhân), mỗi nhân: giải mã + atempo + LAME,
+     * rồi nối các mp3 bằng copy. LAME chỉ chạy 1 nhân/tiến trình nên đây là cách dùng hết CPU.
+     */
+    private fun speedUp(src: File, dur: Double, dir: File, g: Int, nGroups: Int): File {
+        val n = max(1, minOf(cores, ceil(dur / 120).toInt())) // đoạn tối thiểu ~2 phút
+        val len = dur / n
+        val totalOut = dur / p.speed
+        val done = ConcurrentHashMap<Int, Double>()
+        val t0 = System.currentTimeMillis()
+        var lastUi = 0L
+        // mono: đổi sang mono 24kHz TRƯỚC atempo -> ít mẫu cần xử lý hơn (~20% nhanh hơn khi đo)
+        val filter = if (p.mono) "aformat=channel_layouts=mono,aresample=24000,${atempo(p.speed)}" else atempo(p.speed)
+        status(String.format(Locale.US, "Tăng tốc %.2fx: %.0f phút audio trên %d nhân…", p.speed, dur / 60, n))
+        val parts = (0 until n).map { File(dir, String.format(Locale.US, "sp_%d_%02d.mp3", g, it)) }
+        val pool = newPool(n)
+        val futures = (0 until n).map { i ->
+            pool.submit {
                 if (cancelled) return@submit
-                sem.acquire()
-                try { encodeSeg(s) } finally { sem.release() }
+                ffmpeg(listOf(
+                    "-threads", "1",
+                    "-ss", fmt(i * len), "-t", fmt(len), "-i", src.absolutePath,
+                    "-vn", "-af", filter,
+                    "-c:a", "libmp3lame", "-b:a", "${p.bitrateK}k", "-compression_level", "7",
+                    "-progress", "pipe:1", "-nostats",
+                    parts[i].absolutePath,
+                )) { sec ->
+                    done[i] = sec
+                    val now = System.currentTimeMillis()
+                    if (now - lastUi > 400) {
+                        lastUi = now
+                        val d = done.values.sum()
+                        progress(0.45 + 0.55 * (g + 0.9 * d / totalOut) / nGroups)
+                        JobState.status.value = String.format(Locale.US, "Tăng tốc %d/%d: %.0f%% · %.0fx realtime · %d nhân",
+                            g + 1, nGroups, 100 * d / totalOut, d / max(secs(t0), 0.1), n)
+                    }
+                }
             }
         }
-
-        private fun encodeSeg(s: Seg) {
-                val tmp = File(s.out.parentFile, s.out.name + ".tmp.mp3")
-                ffmpeg(
-                    nice = true,
-                    args = listOf(
-                        "-threads", "1",
-                        "-ss", fmt(s.start), "-t", fmt(s.len), "-i", s.raw.file.absolutePath,
-                        "-vn", "-af", filter,
-                        "-c:a", "libmp3lame", "-b:a", "${p.bitrateK}k",
-                        "-compression_level", "7", // chế độ nhanh của LAME
-                        "-progress", "pipe:1", "-nostats",
-                        tmp.absolutePath,
-                    )
-                ) { outSec -> doneSec[s] = outSec; ui() }
-                tmp.renameTo(s.out)
-                doneSec[s] = s.len / p.speed
-                ui()
-                // xong mọi đoạn của video -> xoá file gốc cho nhẹ bộ nhớ
-                if (pending[s.raw]?.decrementAndGet() == 0) s.raw.file.delete()
-        }
-
-        fun finish(): List<Seg> {
-            downloadsDone()
-            totalOut = max(1.0, segs.sumOf { it.len } / p.speed)
-            if (segs.isEmpty()) throw Exception("Không còn video nào sau khi cắt")
-            var err: Throwable? = null
-            var i = 0
-            while (i < futures.size) {
-                runCatching { futures[i].get() }.onFailure { if (err == null) err = it.cause ?: it }
-                i++
-            }
-            pool.shutdown()
-            checkCancel()
-            err?.let { throw Exception("Lỗi mã hoá: ${it.message}") }
-            encStatus = ""
-            log(String.format(Locale.US, "Cắt + tăng tốc %.0f phút audio xong sau %.1fs kể từ video đầu tải xong (%.0fx)",
-                totalOut / 60, secs(t0), totalOut / max(secs(t0), 0.1)))
-            return segs.toList()
-        }
+        var err: Throwable? = null
+        futures.forEach { f -> runCatching { f.get() }.onFailure { if (err == null) err = it.cause ?: it } }
+        pool.shutdown()
+        checkCancel()
+        err?.let { throw Exception("Lỗi tăng tốc: ${it.message}") }
+        val list = File(dir, "sp_$g.txt")
+        list.writeText(parts.joinToString("") { "file '${q(it)}'\n" })
+        val out = File(dir, "sped_$g.mp3")
+        ffmpeg(listOf("-f", "concat", "-safe", "0", "-i", list.absolutePath, "-c", "copy", out.absolutePath))
+        parts.forEach { it.delete() }
+        log(String.format(Locale.US, "Tăng tốc %.0f phút audio: %.1fs (%.0fx realtime)",
+            totalOut / 60, secs(t0), totalOut / max(secs(t0), 0.1)))
+        return out
     }
 
     // ================= ffmpeg =================
@@ -651,6 +640,8 @@ class Pipeline(private val ctx: Context, private val p: Params) {
 
     companion object {
         const val MAX_PARALLEL_DOWNLOADS = 10
+        /** Số video lấy thông tin cùng lúc. 10 cùng lúc làm YouTube nghi là bot -> giảm còn 3. */
+        const val EXTRACT_PARALLEL = 3
         const val MAX_RESTARTS = 3
         const val THROTTLE_WARMUP_MS = 8_000L   // bỏ qua mấy giây đầu (tốc độ chưa ổn định)
         const val THROTTLE_HOLD_MS = 6_000L     // chậm liên tục bấy lâu mới tải lại
