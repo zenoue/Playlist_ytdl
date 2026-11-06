@@ -114,9 +114,13 @@ class MainActivity : AppCompatActivity() {
         copyMode.setOnCheckedChangeListener { _, _ -> syncCopy() }
         syncCopy()
         handleShare(intent)
-        findViewById<TextView>(R.id.version).text = runCatching {
-            packageManager.getPackageInfo(packageName, 0).versionName
-        }.getOrNull() ?: ""
+        findViewById<TextView>(R.id.version).apply {
+            text = (runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "") + " ⟳"
+            // bấm số phiên bản = kiểm tra cập nhật
+            setOnClickListener { Updater(this@MainActivity, lifecycleScope).check(silent = false) }
+        }
+        // tự kiểm tra bản mới mỗi lần mở app (im lặng nếu không có)
+        if (savedInstanceState == null) Updater(this, lifecycleScope).check(silent = true)
         findViewById<ImageView>(R.id.coverPreview).setOnClickListener {
             if (!JobState.running.value) pickCover.launch("image/*")
         }

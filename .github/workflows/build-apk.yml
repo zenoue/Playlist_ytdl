@@ -13,6 +13,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # cần lịch sử + tag để viết danh sách thay đổi
+          fetch-tags: true
 
       - uses: actions/setup-java@v4
         with:
@@ -48,6 +51,22 @@ jobs:
           path: dist/*.apk
           compression-level: 0
 
+      # Danh sách thay đổi = các commit kể từ bản beta trước
+      - name: Danh sách thay đổi
+        run: |
+          PREV=$(git tag --list 'beta_*' --sort=-v:refname | head -1)
+          RANGE="${PREV:+$PREV..}HEAD"
+          {
+            echo "## Thay đổi${PREV:+ kể từ $PREV}"
+            echo
+            git log --no-merges --reverse --format='### %s%n%b' "$RANGE" \
+              | grep -v -E '^(Co-Authored-By|Claude-Session):' | cat -s
+            echo
+            echo "---"
+            echo "Cài: tải file **PlaylistAudio-arm64-v8a-${VER}.apk** bên dưới, hoặc mở app → bấm số phiên bản để tự cập nhật."
+          } > notes.md
+          cat notes.md
+
       # Đăng lên Releases để tải thẳng trên điện thoại (không cần giải nén zip)
       - name: Release
         env:
@@ -56,4 +75,4 @@ jobs:
           gh release create "${VER}" dist/*.apk \
             --target "${{ github.sha }}" \
             --title "Playlist Audio ${VER}" \
-            --notes "Điện thoại phổ thông (2017 trở đi): tải file **arm64-v8a**. Máy rất cũ 32-bit: armeabi-v7a."
+            --notes-file notes.md
