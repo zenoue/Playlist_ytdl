@@ -79,17 +79,23 @@
             android:orientation="horizontal">
             <com.google.android.material.checkbox.MaterialCheckBox
                 android:id="@+id/mono"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Mono 64kbps"
+                android:textSize="13sp" />
+            <com.google.android.material.checkbox.MaterialCheckBox
+                android:id="@+id/copyMode"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Mono 64kbps"
+                android:text="Không mã hoá"
                 android:textSize="13sp" />
             <TextView
                 android:id="@+id/coverLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_marginEnd="8dp"
-                android:text="Ảnh bìa: YouTube"
+                android:layout_marginEnd="6dp"
+                android:text="Ảnh bìa"
                 android:textSize="12sp" />
             <ImageView
                 android:id="@+id/coverPreview"

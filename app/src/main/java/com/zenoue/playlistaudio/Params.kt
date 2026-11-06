@@ -12,6 +12,7 @@ data class Params(
     val group: Int,
     val mono: Boolean = true,
     val coverPath: String = "", // ảnh bìa tự chọn; rỗng = dùng thumbnail YouTube
+    val copyMode: Boolean = false, // không mã hoá: chỉ cắt + ghép, giữ tốc độ gốc
     val saveTree: String = "",  // thư mục lưu (SAF tree uri); rỗng = Download/PlaylistAudio
     val saveLabel: String = DEFAULT_SAVE_LABEL,
 ) {
@@ -20,7 +21,7 @@ data class Params(
     fun toBundle() = Bundle().apply {
         putString("url", url); putInt("from", from); putInt("count", count)
         putDouble("trimStart", trimStart); putDouble("trimEnd", trimEnd)
-        putDouble("speed", speed); putInt("group", group); putBoolean("mono", mono); putString("coverPath", coverPath); putString("saveTree", saveTree); putString("saveLabel", saveLabel)
+        putDouble("speed", speed); putInt("group", group); putBoolean("mono", mono); putString("coverPath", coverPath); putString("saveTree", saveTree); putBoolean("copyMode", copyMode); putString("saveLabel", saveLabel)
     }
 
     companion object {
@@ -29,7 +30,7 @@ data class Params(
         fun from(b: Bundle) = Params(
             b.getString("url")!!, b.getInt("from"), b.getInt("count"),
             b.getDouble("trimStart"), b.getDouble("trimEnd"),
-            b.getDouble("speed"), b.getInt("group"), b.getBoolean("mono", true), b.getString("coverPath") ?: "", b.getString("saveTree") ?: "", b.getString("saveLabel") ?: DEFAULT_SAVE_LABEL,
+            b.getDouble("speed"), b.getInt("group"), b.getBoolean("mono", true), b.getString("coverPath") ?: "", b.getBoolean("copyMode", false), b.getString("saveTree") ?: "", b.getString("saveLabel") ?: DEFAULT_SAVE_LABEL,
         )
 
         /** "75", "1:15", "0:01:15" -> giây */

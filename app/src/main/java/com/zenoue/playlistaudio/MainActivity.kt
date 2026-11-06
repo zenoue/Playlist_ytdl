@@ -37,6 +37,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var group: EditText
     private lateinit var run: Button
     private lateinit var mono: android.widget.CheckBox
+    private lateinit var copyMode: android.widget.CheckBox
 
     private val coverFile by lazy { File(filesDir, "custom_cover") }
     private val pickCover = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -82,6 +83,7 @@ class MainActivity : AppCompatActivity() {
         group = findViewById(R.id.group)
         run = findViewById(R.id.run)
         mono = findViewById(R.id.mono)
+        copyMode = findViewById(R.id.copyMode)
         val status = findViewById<TextView>(R.id.status)
         val log = findViewById<TextView>(R.id.log)
         val progress = findViewById<LinearProgressIndicator>(R.id.progress)
@@ -102,6 +104,15 @@ class MainActivity : AppCompatActivity() {
         speed.setText(prefs.getString("speed", "1.25"))
         group.setText(prefs.getString("group", "10"))
         mono.isChecked = prefs.getBoolean("mono", true)
+        copyMode.isChecked = prefs.getBoolean("copyMode", false)
+        // Không mã hoá: giữ nguyên âm thanh gốc nên tốc độ / mono không áp dụng (chỉnh tốc độ trong app nghe)
+        fun syncCopy() {
+            val on = copyMode.isChecked
+            speed.isEnabled = !on && !JobState.running.value
+            mono.isEnabled = !on && !JobState.running.value
+        }
+        copyMode.setOnCheckedChangeListener { _, _ -> syncCopy() }
+        syncCopy()
         handleShare(intent)
         findViewById<TextView>(R.id.version).text = runCatching {
             packageManager.getPackageInfo(packageName, 0).versionName
@@ -140,7 +151,9 @@ class MainActivity : AppCompatActivity() {
                 launch {
                     JobState.running.collect {
                         run.text = if (it) "Dừng" else "Bắt đầu"
-                        listOf(url, from, count, trimStart, trimEnd, speed, group, mono, findViewById<View>(R.id.coverPreview), findViewById<View>(R.id.coverClear), findViewById<View>(R.id.savePick), findViewById<View>(R.id.saveClear)).forEach { v -> v.isEnabled = !it }
+                        listOf(url, from, count, trimStart, trimEnd, group, copyMode, findViewById<View>(R.id.coverPreview), findViewById<View>(R.id.coverClear), findViewById<View>(R.id.savePick), findViewById<View>(R.id.saveClear)).forEach { v -> v.isEnabled = !it }
+                        speed.isEnabled = !it && !copyMode.isChecked
+                        mono.isEnabled = !it && !copyMode.isChecked
                     }
                 }
                 launch {
@@ -177,6 +190,7 @@ class MainActivity : AppCompatActivity() {
                 speed = speed.text.toString().replace(',', '.').ifBlank { "1" }.toDouble(),
                 group = group.text.toString().ifBlank { "10" }.toInt().coerceAtLeast(1),
                 mono = mono.isChecked,
+                copyMode = copyMode.isChecked,
                 coverPath = if (hasCustomCover()) coverFile.absolutePath else "",
                 saveTree = prefs.getString("saveTree", "") ?: "",
                 saveLabel = prefs.getString("saveLabel", null) ?: Params.DEFAULT_SAVE_LABEL,
@@ -191,7 +205,7 @@ class MainActivity : AppCompatActivity() {
             .putString("url", link).putString("from", from.text.toString())
             .putString("count", count.text.toString()).putString("trimStart", trimStart.text.toString())
             .putString("trimEnd", trimEnd.text.toString()).putString("speed", speed.text.toString())
-            .putString("group", group.text.toString()).putBoolean("mono", mono.isChecked).apply()
+            .putString("group", group.text.toString()).putBoolean("mono", mono.isChecked).putBoolean("copyMode", copyMode.isChecked).apply()
 
         ContextCompat.startForegroundService(
             this, Intent(this, ProcessService::class.java).putExtras(params.toBundle())
@@ -219,7 +233,7 @@ class MainActivity : AppCompatActivity() {
     private fun showCover() {
         val iv = findViewById<ImageView>(R.id.coverPreview)
         val custom = hasCustomCover()
-        findViewById<TextView>(R.id.coverLabel).text = if (custom) "Ảnh bìa: ảnh riêng" else "Ảnh bìa: YouTube"
+        findViewById<TextView>(R.id.coverLabel).text = if (custom) "Ảnh riêng" else "Ảnh bìa"
         findViewById<View>(R.id.coverClear).visibility = if (custom) View.VISIBLE else View.GONE
         if (!custom) { iv.setImageResource(R.drawable.ic_image); return }
         val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
