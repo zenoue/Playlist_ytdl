@@ -11,21 +11,21 @@ data class Params(
     val speed: Double,
     val group: Int,
     val mono: Boolean = true,
+    val coverPath: String = "", // ảnh bìa tự chọn; rỗng = dùng thumbnail YouTube
 ) {
-    /** Mono 64k: mã hoá nhanh hơn ~40%, file nhẹ một nửa, đủ cho giọng đọc. */
     val bitrateK get() = if (mono) 64 else 128
 
     fun toBundle() = Bundle().apply {
         putString("url", url); putInt("from", from); putInt("count", count)
         putDouble("trimStart", trimStart); putDouble("trimEnd", trimEnd)
-        putDouble("speed", speed); putInt("group", group); putBoolean("mono", mono)
+        putDouble("speed", speed); putInt("group", group); putBoolean("mono", mono); putString("coverPath", coverPath)
     }
 
     companion object {
         fun from(b: Bundle) = Params(
             b.getString("url")!!, b.getInt("from"), b.getInt("count"),
             b.getDouble("trimStart"), b.getDouble("trimEnd"),
-            b.getDouble("speed"), b.getInt("group"), b.getBoolean("mono", true),
+            b.getDouble("speed"), b.getInt("group"), b.getBoolean("mono", true), b.getString("coverPath") ?: "",
         )
 
         /** "75", "1:15", "0:01:15" -> giây */

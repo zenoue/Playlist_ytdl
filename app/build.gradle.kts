@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = buildNumber
-        versionName = "1.0.$buildNumber"
+        versionName = project.property("appVersion") as String
     }
 
     // Keystore cố định (chỉ dùng cá nhân) để các bản build sau cài đè được lên bản trước.

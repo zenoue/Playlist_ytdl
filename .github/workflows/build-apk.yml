@@ -28,10 +28,12 @@ jobs:
 
       - name: Đổi tên APK
         run: |
+          VER=$(grep '^appVersion=' gradle.properties | cut -d= -f2)
+          echo "VER=$VER" >> "$GITHUB_ENV"
           mkdir -p dist
           for f in app/build/outputs/apk/release/*.apk; do
             abi=$(basename "$f" | sed -E 's/app-(.*)-release\.apk/\1/')
-            cp "$f" "dist/PlaylistAudio-${abi}-v${{ github.run_number }}.apk"
+            cp "$f" "dist/PlaylistAudio-${abi}-${VER}.apk"
           done
           ls -la dist
 
@@ -46,7 +48,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${{ github.run_number }}" dist/*.apk \
+          gh release create "${VER}-build${{ github.run_number }}" dist/*.apk \
             --target "${{ github.sha }}" \
-            --title "Playlist Audio v${{ github.run_number }}" \
+            --title "Playlist Audio ${VER} (build ${{ github.run_number }})" \
             --notes "Điện thoại phổ thông (2017 trở đi): tải file **arm64-v8a**. Máy rất cũ 32-bit: armeabi-v7a."

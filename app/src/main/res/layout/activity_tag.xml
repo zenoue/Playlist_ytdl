@@ -71,7 +71,7 @@
                 android:hint="Link video / playlist">
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/ytLink"
-                    style="@style/Num"
+                    style="@style/Text"
                     android:inputType="textUri" />
             </com.google.android.material.textfield.TextInputLayout>
             <com.google.android.material.textfield.TextInputLayout
@@ -107,24 +107,24 @@
             android:textStyle="bold" />
 
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            style="@style/FieldFull"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:hint="Tên bài">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/title"
-                style="@style/Num" />
+                style="@style/Text" />
         </com.google.android.material.textfield.TextInputLayout>
 
         <com.google.android.material.textfield.TextInputLayout
-            style="@style/Widget.Material3.TextInputLayout.OutlinedBox"
+            style="@style/FieldFull"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="6dp"
             android:hint="Album">
             <com.google.android.material.textfield.TextInputEditText
                 android:id="@+id/album"
-                style="@style/Num" />
+                style="@style/Text" />
         </com.google.android.material.textfield.TextInputLayout>
 
         <LinearLayout style="@style/Row">
@@ -134,7 +134,7 @@
                 android:hint="Nghệ sĩ / kênh">
                 <com.google.android.material.textfield.TextInputEditText
                     android:id="@+id/artist"
-                    style="@style/Num" />
+                    style="@style/Text" />
             </com.google.android.material.textfield.TextInputLayout>
             <com.google.android.material.textfield.TextInputLayout
                 style="@style/Field"

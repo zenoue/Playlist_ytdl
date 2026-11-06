@@ -405,6 +405,23 @@ class Pipeline(private val ctx: Context, private val p: Params) {
 
     /** Thumbnail (webp/jpg) -> jpg 640px làm ảnh bìa. Không có thì trả null. */
     private fun makeCover(dir: File, index: Int): File? {
+        if (p.coverPath.isNotEmpty() && File(p.coverPath).exists()) {
+            val out = File(dir, "cover_custom.jpg")
+            if (out.exists()) return out
+            return try {
+                ffmpeg(listOf("-i", p.coverPath, "-frames:v", "1",
+                    "-vf", "scale='min(800,iw)':-2", "-q:v", "3", out.absolutePath))
+                out
+            } catch (e: Exception) {
+                if (cancelled) throw e
+                log("Không dùng được ảnh bìa riêng, chuyển sang thumbnail: ${e.message?.take(150)}")
+                makeYtCover(dir, index)
+            }
+        }
+        return makeYtCover(dir, index)
+    }
+
+    private fun makeYtCover(dir: File, index: Int): File? {
         val src = dir.listFiles()?.firstOrNull {
             it.name.startsWith("thumb_$index.") && !it.name.endsWith(".part")
         } ?: return null

@@ -1,3 +1,5 @@
 <resources>
     <color name="ic_bg">#C62828</color>
+    <color name="log_bg">#121212</color>
+    <color name="log_text">#B5B5B5</color>
 </resources>

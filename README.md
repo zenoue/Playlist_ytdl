@@ -3,7 +3,7 @@
 App Android: dán link playlist YouTube → tải audio → **cắt đầu / cắt cuối** → **tăng tốc** → **gộp mỗi N video thành 1 file mp3**. Mọi thứ chạy trên điện thoại (dùng mạng của máy nên không bị YouTube chặn như máy chủ).
 
 ## Tải APK
-Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-arm64-v8a-vN.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
+Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-arm64-v8a-<phiên bản>.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
 
 Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có thể cài đè bản mới lên bản cũ.
 
@@ -16,7 +16,7 @@ Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có th
 | Tốc độ | `1.25`, `1.5`, `2`… |
 | Gộp mỗi N video | mặc định 10 |
 
-Kết quả: `Download/PlaylistAudio/<tên playlist>_01_v1-10.mp3`, … kèm **ảnh bìa** (thumbnail video đầu nhóm) và tag album/tên/số phần để app nghe nhạc nhóm đúng.
+Kết quả: `Download/PlaylistAudio/<tên playlist>_01_v1-10.mp3`, … kèm **ảnh bìa** (thumbnail video đầu nhóm, hoặc ảnh tự chọn trong máy: bấm ô ảnh cạnh "Mono") và tag album/tên/số phần để app nghe nhạc nhóm đúng.
 
 App nghe gợi ý (nhẹ, không quảng cáo, nhớ vị trí đang nghe): **Voice** (F-Droid), **Musicolet** (Play Store).
 

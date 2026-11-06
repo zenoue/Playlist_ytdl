@@ -7,8 +7,13 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.widget.Button
+import android.view.View
 import android.widget.EditText
 import android.widget.ScrollView
+import android.widget.ImageView
+import android.graphics.BitmapFactory
+import androidx.activity.result.contract.ActivityResultContracts
+import java.io.File
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
@@ -33,6 +38,16 @@ class MainActivity : AppCompatActivity() {
     private lateinit var run: Button
     private lateinit var mono: android.widget.CheckBox
 
+    private val coverFile by lazy { File(filesDir, "custom_cover") }
+    private val pickCover = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+        uri ?: return@registerForActivityResult
+        runCatching {
+            contentResolver.openInputStream(uri)!!.use { i -> coverFile.outputStream().use { i.copyTo(it) } }
+            prefs.edit().putBoolean("customCover", true).apply()
+        }.onFailure { toast("Không đọc được ảnh") }
+        showCover()
+    }
+
     private val prefs by lazy { getSharedPreferences("last", Context.MODE_PRIVATE) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,10 +65,10 @@ class MainActivity : AppCompatActivity() {
         val status = findViewById<TextView>(R.id.status)
         val log = findViewById<TextView>(R.id.log)
         val progress = findViewById<LinearProgressIndicator>(R.id.progress)
-        val scroll = findViewById<ScrollView>(R.id.scroll)
+        val scroll = findViewById<ScrollView>(R.id.logScroll)
 
         // Android 15 vẽ tràn viền: chừa chỗ cho thanh trạng thái / thanh điều hướng / bàn phím
-        ViewCompat.setOnApplyWindowInsetsListener(scroll) { v, insets ->
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             insets
@@ -68,6 +83,18 @@ class MainActivity : AppCompatActivity() {
         group.setText(prefs.getString("group", "10"))
         mono.isChecked = prefs.getBoolean("mono", true)
         handleShare(intent)
+        findViewById<TextView>(R.id.version).text = runCatching {
+            packageManager.getPackageInfo(packageName, 0).versionName
+        }.getOrNull() ?: ""
+        findViewById<ImageView>(R.id.coverPreview).setOnClickListener {
+            if (!JobState.running.value) pickCover.launch("image/*")
+        }
+        findViewById<View>(R.id.coverClear).setOnClickListener {
+            prefs.edit().putBoolean("customCover", false).apply()
+            coverFile.delete()
+            showCover()
+        }
+        showCover()
 
         findViewById<Button>(R.id.openTag).setOnClickListener {
             startActivity(Intent(this, TagActivity::class.java).putExtra("link", url.text.toString().trim()))
@@ -93,7 +120,7 @@ class MainActivity : AppCompatActivity() {
                 launch {
                     JobState.running.collect {
                         run.text = if (it) "Dừng" else "Bắt đầu"
-                        listOf(url, from, count, trimStart, trimEnd, speed, group, mono).forEach { v -> v.isEnabled = !it }
+                        listOf(url, from, count, trimStart, trimEnd, speed, group, mono, findViewById<View>(R.id.coverPreview), findViewById<View>(R.id.coverClear)).forEach { v -> v.isEnabled = !it }
                     }
                 }
                 launch {
@@ -130,6 +157,7 @@ class MainActivity : AppCompatActivity() {
                 speed = speed.text.toString().replace(',', '.').ifBlank { "1" }.toDouble(),
                 group = group.text.toString().ifBlank { "10" }.toInt().coerceAtLeast(1),
                 mono = mono.isChecked,
+                coverPath = if (hasCustomCover()) coverFile.absolutePath else "",
             )
         } catch (e: Exception) {
             return toast("Giá trị nhập không hợp lệ")
@@ -146,6 +174,22 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(
             this, Intent(this, ProcessService::class.java).putExtras(params.toBundle())
         )
+    }
+
+    private fun hasCustomCover() = prefs.getBoolean("customCover", false) && coverFile.exists()
+
+    private fun showCover() {
+        val iv = findViewById<ImageView>(R.id.coverPreview)
+        val custom = hasCustomCover()
+        findViewById<TextView>(R.id.coverLabel).text = if (custom) "Ảnh bìa: ảnh riêng" else "Ảnh bìa: YouTube"
+        findViewById<View>(R.id.coverClear).visibility = if (custom) View.VISIBLE else View.GONE
+        if (!custom) { iv.setImageResource(R.drawable.ic_image); return }
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(coverFile.absolutePath, o)
+        var sample = 1
+        while (o.outWidth / sample > 256 || o.outHeight / sample > 256) sample *= 2
+        iv.setImageBitmap(BitmapFactory.decodeFile(coverFile.absolutePath,
+            BitmapFactory.Options().apply { inSampleSize = sample }))
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
