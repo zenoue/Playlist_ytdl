@@ -62,6 +62,11 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         status("Khởi tạo (lần đầu hơi lâu)…")
         YoutubeDL.getInstance().init(ctx)
         FFmpeg.getInstance().init(ctx)
+        // aria2c: tải mỗi file bằng 16 kết nối song song (như tuỳ chọn aria2c của YTDLnis)
+        val ariaOk = runCatching { com.yausername.aria2c.Aria2c.getInstance().init(ctx) }
+            .onFailure { log("Không khởi tạo được aria2c, dùng trình tải thường: ${it.message?.take(120)}") }
+            .isSuccess
+        log(String.format(Locale.US, "Khởi tạo: %.1fs", secs(tAll)))
         log("CPU: $cores nhân")
 
         // Kiểm tra cập nhật yt-dlp tối đa 1 lần / 12 giờ
@@ -107,7 +112,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         val dir = File(work, key).apply { mkdirs() }
         work.listFiles()?.filter { it.name != key }?.forEach { it.deleteRecursively() }
 
-        val raws = downloadAll(entries, dir)
+        val raws = downloadAll(entries, dir, ariaOk)
         checkCancel()
         if (raws.isEmpty()) throw Exception("Không tải được video nào")
 
@@ -164,7 +169,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
 
     // ================= Giai đoạn 1: tải song song =================
 
-    private fun downloadAll(entries: List<Entry>, dir: File): List<Raw> {
+    private fun downloadAll(entries: List<Entry>, dir: File, ariaOk: Boolean): List<Raw> {
         val total = entries.size
         val conc = minOf(MAX_PARALLEL_DOWNLOADS, total)
         val t0 = System.currentTimeMillis()
@@ -227,20 +232,27 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                         Raw(e, File(path), d.toDouble()).takeIf { it.file.exists() }
                     } else null
                     var attempt = 0
+                    var useAria = ariaOk
                     while (raw == null) {
                         if (cancelled) throw CancelledByUser()
                         flowingSince.remove(n); slowSince.remove(n); speed.remove(n)
                         try {
-                            raw = download(e, dir) { pct, line ->
+                            raw = download(e, dir, useAria) { pct, line ->
                                 frac[n] = pct
                                 parseSpeed(line)?.let {
                                     speed[n] = it
-                                    flowingSince.putIfAbsent(n, System.currentTimeMillis())
+                                    if (flowingSince.putIfAbsent(n, System.currentTimeMillis()) == null && attempt == 0)
+                                        log(String.format(Locale.US, "%s Bắt đầu nhận dữ liệu sau %.1fs", tag, secs(t1)))
                                 }
                                 ui()
                             }
                         } catch (ex: Exception) {
                             val sp = restartReq.remove(n)
+                            if (!cancelled && sp == null && useAria) {
+                                useAria = false
+                                log("$tag aria2c lỗi (${ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(120)}) → dùng trình tải thường")
+                                continue
+                            }
                             if (cancelled || sp == null) throw ex
                             attempt++
                             restarts.incrementAndGet()
@@ -249,7 +261,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                                 log("$tag Đã tải lại $attempt lần, để luồng này chạy tiếp")
                                 // lần cuối: không cho canh gác huỷ nữa
                                 flowingSince.remove(n); speed.remove(n)
-                                raw = download(e, dir) { pct, line -> frac[n] = pct; parseSpeed(line)?.let { speed[n] = it }; ui() }
+                                raw = download(e, dir, useAria) { pct, line -> frac[n] = pct; parseSpeed(line)?.let { speed[n] = it }; ui() }
                             }
                         }
                     }
@@ -278,7 +290,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         return ok
     }
 
-    private fun download(e: Entry, dir: File, onProgress: (Double, String) -> Unit): Raw {
+    private fun download(e: Entry, dir: File, aria: Boolean, onProgress: (Double, String) -> Unit): Raw {
         val req = YoutubeDLRequest("https://www.youtube.com/watch?v=${e.id}").apply {
             // Mono 64k: chọn luồng audio bitrate thấp (~50-70k) -> tải và giải mã nhanh hơn
             addOption("-f", if (p.mono) "bestaudio[abr<=80]/bestaudio/best" else "bestaudio[ext=m4a]/bestaudio/best")
@@ -288,6 +300,9 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             addOption("--retries", "10")
             addOption("--fragment-retries", "10")
             addOption("--concurrent-fragments", "4")
+            // yt-dlp gọi aria2c với -x16 -s16 --min-split-size 1M: 16 kết nối/ file,
+            // vượt giới hạn tốc độ theo từng kết nối của YouTube
+            if (aria) addOption("--downloader", "libaria2c.so")
             addOption("-o", File(dir, "raw_${e.index}.%(ext)s").absolutePath)
             addOption("--no-simulate")
             addOption("--progress")  // --print bật chế độ quiet; vẫn cần dòng tiến độ
@@ -502,10 +517,11 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             .replace(Regex("\\s+"), " ").trim().ifEmpty { "audio" }
 
         private val speedRe = Regex("at\\s+~?\\s*([\\d.]+)\\s*([KMG]?i?B)/s")
+        private val ariaSpeedRe = Regex("DL:([\\d.]+)([KMG]?i?B)")
 
         /** "[download]  23.5% of 48.29MiB at 2.31MiB/s ETA 00:16" -> bytes/s */
         fun parseSpeed(line: String): Double? {
-            val m = speedRe.find(line) ?: return null
+            val m = speedRe.find(line) ?: ariaSpeedRe.find(line) ?: return null
             val v = m.groupValues[1].toDoubleOrNull() ?: return null
             val mul = when (m.groupValues[2].firstOrNull()) {
                 'K' -> 1024.0; 'M' -> 1048576.0; 'G' -> 1073741824.0; else -> 1.0
