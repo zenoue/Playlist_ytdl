@@ -155,6 +155,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         val raws = downloadAll(entries, dir, ariaOk) { raw -> enc?.submit(raw) }
         checkCancel()
         if (raws.isEmpty()) throw Exception("Không tải được video nào")
+        enc?.downloadsDone()
         val segs = enc?.finish() ?: emptyList()
         checkCancel()
 
@@ -341,8 +342,8 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                     onDone(raw)
                     val sizeMb = raw.file.length() / 1048576.0
                     finishedRates += raw.file.length() / max(secs(t1), 0.1)
-                    log(String.format(Locale.US, "%s Tải xong %.1fMB trong %.1fs: %s",
-                        tag, sizeMb, secs(t1), e.title))
+                    log(String.format(Locale.US, "%s Tải xong %.1fMB (%s) trong %.1fs: %s",
+                        tag, sizeMb, raw.file.extension, secs(t1), e.title))
                 } catch (ex: Exception) {
                     if (!cancelled) log("$tag LỖI tải, bỏ qua: ${ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(300)}")
                 } finally {
@@ -441,6 +442,14 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         private val target = max(180.0, estKeep / (cores * 3))
         private var totalOut = max(1.0, estKeep / p.speed)
         private val pool = newPool(cores)
+        // Trong lúc còn tải: chỉ dùng 1/4 số nhân để yt-dlp (Python + QuickJS giải thử thách) và aria2c
+        // không bị tranh CPU -> tải không chậm đi. Tải xong mới mở hết các nhân.
+        private val busyPermits = max(1, cores / 4)
+        private val sem = java.util.concurrent.Semaphore(busyPermits)
+        @Volatile private var opened = false
+        fun downloadsDone() {
+            if (!opened) { opened = true; sem.release(cores - busyPermits) }
+        }
         private val futures = Collections.synchronizedList(mutableListOf<java.util.concurrent.Future<*>>())
         private val segs = Collections.synchronizedList(mutableListOf<Seg>())
         private val doneSec = ConcurrentHashMap<Seg, Double>()
@@ -477,9 +486,16 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             pending[r] = AtomicInteger(k)
             for (s in mine) futures += pool.submit {
                 if (cancelled) return@submit
+                sem.acquire()
+                try { encodeSeg(s) } finally { sem.release() }
+            }
+        }
+
+        private fun encodeSeg(s: Seg) {
                 val tmp = File(s.out.parentFile, s.out.name + ".tmp.mp3")
                 ffmpeg(
-                    listOf(
+                    nice = true,
+                    args = listOf(
                         "-threads", "1",
                         "-ss", fmt(s.start), "-t", fmt(s.len), "-i", s.raw.file.absolutePath,
                         "-vn", "-af", filter,
@@ -494,10 +510,10 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                 ui()
                 // xong mọi đoạn của video -> xoá file gốc cho nhẹ bộ nhớ
                 if (pending[s.raw]?.decrementAndGet() == 0) s.raw.file.delete()
-            }
         }
 
         fun finish(): List<Seg> {
+            downloadsDone()
             totalOut = max(1.0, segs.sumOf { it.len } / p.speed)
             if (segs.isEmpty()) throw Exception("Không còn video nào sau khi cắt")
             var err: Throwable? = null
@@ -572,7 +588,9 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         return h.toDouble() * 3600 + mi.toDouble() * 60 + s.toDouble()
     }
 
-    private fun ffmpeg(args: List<String>, onOutSec: (Double) -> Unit = {}) {
+    private fun ffmpeg(args: List<String>, nice: Boolean = false, onOutSec: (Double) -> Unit = {}) {
+        // nice: hạ ưu tiên luồng hiện tại (nice 10); tiến trình ffmpeg con thừa hưởng -> nhường CPU cho tải
+        if (nice) runCatching { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_BACKGROUND) }
         val cmd = listOf(File(libDir(), "libffmpeg.so").absolutePath, "-hide_banner", "-nostdin", "-y",
             "-loglevel", "error") + args
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
