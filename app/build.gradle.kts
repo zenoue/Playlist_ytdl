@@ -52,6 +52,9 @@ android {
         jniLibs { useLegacyPackaging = true }
     }
 
+    // Bản engine dự phòng đóng gói trong APK (khi không tải được bản mới từ server)
+    sourceSets["main"].assets.srcDir("../engine")
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

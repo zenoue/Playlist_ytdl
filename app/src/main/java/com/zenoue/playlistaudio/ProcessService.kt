@@ -26,7 +26,7 @@ import kotlinx.coroutines.launch
 class ProcessService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private var pipeline: Pipeline? = null
+    private var pipeline: Engine? = null
     private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -50,7 +50,7 @@ class ProcessService : Service() {
 
         JobState.reset()
         JobState.running.value = true
-        val p = Pipeline(applicationContext, params)
+        val p = Engine(applicationContext, params)
         pipeline = p
 
         val nm = getSystemService(NotificationManager::class.java)
