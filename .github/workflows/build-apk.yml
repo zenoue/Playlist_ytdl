@@ -21,15 +21,20 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      - name: Phiên bản
+        run: |
+          OFF=$(grep '^betaOffset=' gradle.properties | cut -d= -f2)
+          echo "VER=beta_$(( ${{ github.run_number }} - OFF ))" >> "$GITHUB_ENV"
+
       - name: Build APK
+        env:
+          APP_VERSION: ${{ env.VER }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --console=plain
 
       - name: Đổi tên APK
         run: |
-          VER=$(grep '^appVersion=' gradle.properties | cut -d= -f2)
-          echo "VER=$VER" >> "$GITHUB_ENV"
           mkdir -p dist
           for f in app/build/outputs/apk/release/*.apk; do
             abi=$(basename "$f" | sed -E 's/app-(.*)-release\.apk/\1/')
@@ -48,7 +53,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${VER}-build${{ github.run_number }}" dist/*.apk \
+          gh release create "${VER}" dist/*.apk \
             --target "${{ github.sha }}" \
-            --title "Playlist Audio ${VER} (build ${{ github.run_number }})" \
+            --title "Playlist Audio ${VER}" \
             --notes "Điện thoại phổ thông (2017 trở đi): tải file **arm64-v8a**. Máy rất cũ 32-bit: armeabi-v7a."

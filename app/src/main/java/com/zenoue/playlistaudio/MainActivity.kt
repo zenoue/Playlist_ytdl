@@ -46,6 +46,26 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().putBoolean("customCover", true).apply()
         }.onFailure { toast("Không đọc được ảnh") }
         showCover()
+        findViewById<View>(R.id.savePick).setOnClickListener { if (!JobState.running.value) pickSave.launch(null) }
+        findViewById<View>(R.id.saveClear).setOnClickListener {
+            prefs.getString("saveTree", null)?.let { t ->
+                runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(t),
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
+            }
+            prefs.edit().remove("saveTree").remove("saveLabel").apply()
+            showSave()
+        }
+        showSave()
+    }
+
+    private val pickSave = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        uri ?: return@registerForActivityResult
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            prefs.edit().putString("saveTree", uri.toString()).putString("saveLabel", treeLabel(uri)).apply()
+        }.onFailure { toast("Không lấy được quyền ghi thư mục") }
+        showSave()
     }
 
     private val prefs by lazy { getSharedPreferences("last", Context.MODE_PRIVATE) }
@@ -120,7 +140,7 @@ class MainActivity : AppCompatActivity() {
                 launch {
                     JobState.running.collect {
                         run.text = if (it) "Dừng" else "Bắt đầu"
-                        listOf(url, from, count, trimStart, trimEnd, speed, group, mono, findViewById<View>(R.id.coverPreview), findViewById<View>(R.id.coverClear)).forEach { v -> v.isEnabled = !it }
+                        listOf(url, from, count, trimStart, trimEnd, speed, group, mono, findViewById<View>(R.id.coverPreview), findViewById<View>(R.id.coverClear), findViewById<View>(R.id.savePick), findViewById<View>(R.id.saveClear)).forEach { v -> v.isEnabled = !it }
                     }
                 }
                 launch {
@@ -158,6 +178,8 @@ class MainActivity : AppCompatActivity() {
                 group = group.text.toString().ifBlank { "10" }.toInt().coerceAtLeast(1),
                 mono = mono.isChecked,
                 coverPath = if (hasCustomCover()) coverFile.absolutePath else "",
+                saveTree = prefs.getString("saveTree", "") ?: "",
+                saveLabel = prefs.getString("saveLabel", null) ?: Params.DEFAULT_SAVE_LABEL,
             )
         } catch (e: Exception) {
             return toast("Giá trị nhập không hợp lệ")
@@ -174,6 +196,22 @@ class MainActivity : AppCompatActivity() {
         ContextCompat.startForegroundService(
             this, Intent(this, ProcessService::class.java).putExtras(params.toBundle())
         )
+    }
+
+    /** content://…/tree/primary%3AMusic%2FTruyen -> "Music/Truyen" */
+    private fun treeLabel(uri: android.net.Uri): String {
+        val id = runCatching { android.provider.DocumentsContract.getTreeDocumentId(uri) }.getOrNull() ?: return uri.toString()
+        val vol = id.substringBefore(':')
+        val path = id.substringAfter(':', "")
+        val root = if (vol == "primary") "Bộ nhớ trong" else "Thẻ nhớ"
+        return if (path.isEmpty()) root else path
+    }
+
+    private fun showSave() {
+        val custom = prefs.getString("saveTree", null) != null
+        findViewById<TextView>(R.id.saveLabel).text =
+            "Lưu vào: " + (if (custom) prefs.getString("saveLabel", "") else Params.DEFAULT_SAVE_LABEL)
+        findViewById<View>(R.id.saveClear).visibility = if (custom) View.VISIBLE else View.GONE
     }
 
     private fun hasCustomCover() = prefs.getBoolean("customCover", false) && coverFile.exists()

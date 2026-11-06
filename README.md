@@ -3,7 +3,7 @@
 App Android: dán link playlist YouTube → tải audio → **cắt đầu / cắt cuối** → **tăng tốc** → **gộp mỗi N video thành 1 file mp3**. Mọi thứ chạy trên điện thoại (dùng mạng của máy nên không bị YouTube chặn như máy chủ).
 
 ## Tải APK
-Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-arm64-v8a-<phiên bản>.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
+Mỗi lần build tự tăng số beta (beta_2, beta_3, …). Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-arm64-v8a-<phiên bản>.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
 
 Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có thể cài đè bản mới lên bản cũ.
 

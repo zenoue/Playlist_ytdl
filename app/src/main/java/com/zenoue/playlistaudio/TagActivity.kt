@@ -178,7 +178,7 @@ class TagActivity : AppCompatActivity() {
             addOption("--skip-download")
             addOption("--write-thumbnail")
             addOption("--no-write-playlist-metafiles")
-            addOption("--extractor-args", "youtube:player_client=visionos;player_skip=webpage,configs")
+            addOption("--extractor-args", "youtube:player_client=visionos")
             addOption("--cache-dir", File(filesDir, "yt-dlp-cache").absolutePath)
             if (isList) { addOption("--yes-playlist"); addOption("-I", "$idx") } else addOption("--no-playlist")
             addOption("-o", "thumbnail:" + File(dir, "thumb.%(ext)s").absolutePath)

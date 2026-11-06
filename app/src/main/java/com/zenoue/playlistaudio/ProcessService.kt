@@ -63,7 +63,7 @@ class ProcessService : Service() {
         scope.launch {
             val msg = try {
                 val files = p.run()
-                "Hoàn thành ${files.size} file → Download/PlaylistAudio"
+                "Hoàn thành ${files.size} file → ${params.saveLabel}"
             } catch (e: CancelledByUser) {
                 "Đã dừng"
             } catch (e: Throwable) {

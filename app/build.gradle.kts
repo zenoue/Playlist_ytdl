@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = buildNumber
-        versionName = project.property("appVersion") as String
+        versionName = System.getenv("APP_VERSION") ?: "beta_dev"
     }
 
     // Keystore cố định (chỉ dùng cá nhân) để các bản build sau cài đè được lên bản trước.
@@ -64,6 +64,7 @@ dependencies {
     implementation("io.github.junkfood02.youtubedl-android:ffmpeg:$ytdlVersion")
     implementation("io.github.junkfood02.youtubedl-android:aria2c:$ytdlVersion")
     implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")

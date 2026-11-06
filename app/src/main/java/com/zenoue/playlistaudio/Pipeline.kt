@@ -82,6 +82,15 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         log("aria2c symlink lỗi (${e.message?.take(100)}), dùng cách thường"); null
     }
 
+    // Lấy thông tin nhanh (client visionos, không cần JS). Nếu bị YouTube chặn thì tắt cho cả lượt
+    // chạy và 24 giờ sau, tránh mất thời gian thử lại.
+    @Volatile private var fastOff = false
+    private fun fastAllowed() = !fastOff && System.currentTimeMillis() - prefs.getLong("fastFail", 0) > 24 * 3600_000L
+    private fun disableFast() {
+        fastOff = true
+        prefs.edit().putLong("fastFail", System.currentTimeMillis()).apply()
+    }
+
     private fun newPool(n: Int) = Executors.newFixedThreadPool(n).also { pools += it }
 
     fun run(): List<String> {
@@ -261,14 +270,14 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                     } else null
                     var attempt = 0
                     var useAria = ariaOk
-                    var fast = true
+                    var fast = fastAllowed()
                     while (raw == null) {
                         var extracted = false
                         if (cancelled) throw CancelledByUser()
                         flowingSince.remove(n); slowSince.remove(n); speed.remove(n)
                         try {
                             raw = download(e, dir, useAria, fast) { pct, line ->
-                                if (line.trim() == "EXTRACTED") {
+                                if (line.contains("@@EXTRACTED")) {
                                     extracted = true
                                     if (attempt == 0) log(String.format(Locale.US, "%s Lấy thông tin: %.1fs%s",
                                         tag, secs(t1), if (fast) "" else " (chế độ đầy đủ)"))
@@ -286,6 +295,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                             val why = ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(150)
                             if (!cancelled && sp == null && !extracted && fast) {
                                 fast = false
+                                disableFast()
                                 log("$tag Lấy thông tin nhanh lỗi ($why) → chế độ đầy đủ")
                                 continue
                             }
@@ -353,8 +363,9 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             }
             // Lấy thông tin nhanh: client visionos không cần chạy JavaScript (bỏ bước QuickJS giải
             // thử thách, chậm nhất trên điện thoại) và không cần PO token; bỏ tải trang web/config.
-            if (fast) addOption("--extractor-args", "youtube:player_client=visionos;player_skip=webpage,configs")
-            addOption("--print", "before_dl:EXTRACTED")
+            if (fast) addOption("--extractor-args", "youtube:player_client=visionos")
+            // Lưu ý: một từ đơn như "EXTRACTED" bị yt-dlp hiểu là tên trường (in ra "NA") -> thêm ký tự lạ
+            addOption("--print", "before_dl:@@EXTRACTED %(id)s")
             addOption("-o", File(dir, "raw_${e.index}.%(ext)s").absolutePath)
             addOption("--no-simulate")
             addOption("--progress")  // --print bật chế độ quiet; vẫn cần dòng tiến độ
@@ -532,8 +543,17 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         if (proc.exitValue() != 0) throw Exception("ffmpeg lỗi (${proc.exitValue()}): ${tail.joinToString(" | ").take(400)}")
     }
 
-    /** Lưu vào Download/PlaylistAudio (thấy được trong app Files / trình nghe nhạc). */
+    /** Lưu vào thư mục người dùng chọn, mặc định Download/PlaylistAudio. */
     private fun export(src: File, name: String): String {
+        if (p.saveTree.isNotEmpty()) {
+            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, android.net.Uri.parse(p.saveTree))
+            if (tree == null || !tree.canWrite()) throw Exception("Không ghi được vào thư mục ${p.saveLabel}. Hãy chọn lại thư mục lưu.")
+            tree.findFile(name)?.delete()
+            val f = tree.createFile("audio/mpeg", name) ?: throw Exception("Không tạo được file trong ${p.saveLabel}")
+            ctx.contentResolver.openOutputStream(f.uri)!!.use { o -> src.inputStream().use { it.copyTo(o) } }
+            log("Đã lưu: ${p.saveLabel}/${f.name ?: name}")
+            return name
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.Downloads.DISPLAY_NAME, name)
