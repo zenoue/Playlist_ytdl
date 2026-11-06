@@ -55,6 +55,33 @@ class Pipeline(private val ctx: Context, private val p: Params) {
     private fun progress(f: Double) { JobState.progress.value = (f.coerceIn(0.0, 1.0) * 1000).toInt() }
     private fun secs(t0: Long) = (System.currentTimeMillis() - t0) / 1000.0
 
+    /** Đường dẫn "aria2c" (symlink tới libaria2c.so) để tự truyền tham số cho aria2c. */
+    @Volatile private var ariaExe: String? = null
+
+    /**
+     * Thư viện tự thêm 2 lần --external-downloader-args khi thấy "libaria2c.so", lần sau đè lần trước
+     * nên mất --summary-interval=1 -> aria2c không in tiến độ. Gọi qua symlink tên "aria2c" để
+     * thư viện không can thiệp, rồi tự truyền đủ tham số.
+     */
+    private fun setupAriaLink(): String? = try {
+        val bin = File(ctx.filesDir, "bin").apply { mkdirs() }
+        val link = File(bin, "aria2c")
+        val target = File(ctx.applicationInfo.nativeLibraryDir, "libaria2c.so").absolutePath
+        if (runCatching { android.system.Os.readlink(link.absolutePath) }.getOrNull() != target) {
+            link.delete()
+            android.system.Os.symlink(target, link.absolutePath)
+        }
+        val pk = File(ctx.noBackupFilesDir, "youtubedl-android/packages")
+        val pb = ProcessBuilder(link.absolutePath, "-v").redirectErrorStream(true)
+        pb.environment()["LD_LIBRARY_PATH"] = "${pk.absolutePath}/aria2c/usr/lib:${pk.absolutePath}/python/usr/lib"
+        val pr = pb.start()
+        val out = pr.inputStream.bufferedReader().readText()
+        if (pr.waitFor() == 0 && out.contains("aria2")) link.absolutePath
+        else { log("aria2c symlink không chạy được, dùng cách thường"); null }
+    } catch (e: Exception) {
+        log("aria2c symlink lỗi (${e.message?.take(100)}), dùng cách thường"); null
+    }
+
     private fun newPool(n: Int) = Executors.newFixedThreadPool(n).also { pools += it }
 
     fun run(): List<String> {
@@ -66,6 +93,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         val ariaOk = runCatching { com.yausername.aria2c.Aria2c.getInstance().init(ctx) }
             .onFailure { log("Không khởi tạo được aria2c, dùng trình tải thường: ${it.message?.take(120)}") }
             .isSuccess
+        ariaExe = if (ariaOk) setupAriaLink() else null
         log(String.format(Locale.US, "Khởi tạo: %.1fs", secs(tAll)))
         log("CPU: $cores nhân")
 
@@ -233,21 +261,34 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                     } else null
                     var attempt = 0
                     var useAria = ariaOk
+                    var fast = true
                     while (raw == null) {
+                        var extracted = false
                         if (cancelled) throw CancelledByUser()
                         flowingSince.remove(n); slowSince.remove(n); speed.remove(n)
                         try {
-                            raw = download(e, dir, useAria) { pct, line ->
+                            raw = download(e, dir, useAria, fast) { pct, line ->
+                                if (line.trim() == "EXTRACTED") {
+                                    extracted = true
+                                    if (attempt == 0) log(String.format(Locale.US, "%s Lấy thông tin: %.1fs%s",
+                                        tag, secs(t1), if (fast) "" else " (chế độ đầy đủ)"))
+                                    return@download
+                                }
                                 frac[n] = pct
                                 parseSpeed(line)?.let {
                                     speed[n] = it
-                                    if (flowingSince.putIfAbsent(n, System.currentTimeMillis()) == null && attempt == 0)
-                                        log(String.format(Locale.US, "%s Bắt đầu nhận dữ liệu sau %.1fs", tag, secs(t1)))
+                                    flowingSince.putIfAbsent(n, System.currentTimeMillis())
                                 }
                                 ui()
                             }
                         } catch (ex: Exception) {
                             val sp = restartReq.remove(n)
+                            val why = ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(150)
+                            if (!cancelled && sp == null && !extracted && fast) {
+                                fast = false
+                                log("$tag Lấy thông tin nhanh lỗi ($why) → chế độ đầy đủ")
+                                continue
+                            }
                             if (!cancelled && sp == null && useAria) {
                                 useAria = false
                                 log("$tag aria2c lỗi (${ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(120)}) → dùng trình tải thường")
@@ -261,7 +302,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                                 log("$tag Đã tải lại $attempt lần, để luồng này chạy tiếp")
                                 // lần cuối: không cho canh gác huỷ nữa
                                 flowingSince.remove(n); speed.remove(n)
-                                raw = download(e, dir, useAria) { pct, line -> frac[n] = pct; parseSpeed(line)?.let { speed[n] = it }; ui() }
+                                raw = download(e, dir, useAria, fast) { pct, line -> frac[n] = pct; parseSpeed(line)?.let { speed[n] = it }; ui() }
                             }
                         }
                     }
@@ -290,7 +331,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         return ok
     }
 
-    private fun download(e: Entry, dir: File, aria: Boolean, onProgress: (Double, String) -> Unit): Raw {
+    private fun download(e: Entry, dir: File, aria: Boolean, fast: Boolean, onProgress: (Double, String) -> Unit): Raw {
         val req = YoutubeDLRequest("https://www.youtube.com/watch?v=${e.id}").apply {
             // Mono 64k: chọn luồng audio bitrate thấp (~50-70k) -> tải và giải mã nhanh hơn
             addOption("-f", if (p.mono) "bestaudio[abr<=80]/bestaudio/best" else "bestaudio[ext=m4a]/bestaudio/best")
@@ -302,7 +343,18 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             addOption("--concurrent-fragments", "4")
             // yt-dlp gọi aria2c với -x16 -s16 --min-split-size 1M: 16 kết nối/ file,
             // vượt giới hạn tốc độ theo từng kết nối của YouTube
-            if (aria) addOption("--downloader", "libaria2c.so")
+            if (aria) {
+                val exe = ariaExe
+                if (exe != null) {
+                    val cert = File(ctx.noBackupFilesDir, "youtubedl-android/packages/python/usr/etc/tls/cert.pem")
+                    addOption("--downloader", exe)
+                    addOption("--downloader-args", "aria2c:--summary-interval=1 --ca-certificate=${cert.absolutePath}")
+                } else addOption("--downloader", "libaria2c.so")
+            }
+            // Lấy thông tin nhanh: client visionos không cần chạy JavaScript (bỏ bước QuickJS giải
+            // thử thách, chậm nhất trên điện thoại) và không cần PO token; bỏ tải trang web/config.
+            if (fast) addOption("--extractor-args", "youtube:player_client=visionos;player_skip=webpage,configs")
+            addOption("--print", "before_dl:EXTRACTED")
             addOption("-o", File(dir, "raw_${e.index}.%(ext)s").absolutePath)
             addOption("--no-simulate")
             addOption("--progress")  // --print bật chế độ quiet; vẫn cần dòng tiến độ
