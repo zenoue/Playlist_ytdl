@@ -47,14 +47,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
     private fun isBot(msg: String?) = msg?.contains("not a bot") == true || msg?.contains("Sign in to confirm") == true
     /** Chỉ cho tối đa EXTRACT_PARALLEL video cùng lúc ở bước lấy thông tin (bước gửi nhiều request tới YouTube). */
     // Giống YTDLnis: mặc định lần lượt từng video (1 luồng lấy thông tin) + chờ ngẫu nhiên giữa các lần.
-    // Có cookies đăng nhập thì YouTube dễ tính hơn -> cho 2 luồng.
-    private val extractSem = java.util.concurrent.Semaphore(
-        if (CookieStore.hasCookies(ctx)) EXTRACT_PARALLEL_LOGGED_IN else EXTRACT_PARALLEL)
-    /** cookies.txt (Netscape) lấy từ đăng nhập YouTube trong app; mỗi tiến trình yt-dlp dùng 1 bản sao riêng. */
-    private val cookieSrc = CookieStore.file(ctx).takeIf { it.exists() && it.length() > 0 }
-    private fun cookieCopy(tag: String): File? = cookieSrc?.let { src ->
-        File(ctx.cacheDir, "ck_$tag.txt").also { src.copyTo(it, overwrite = true) }
-    }
+    private val extractSem = java.util.concurrent.Semaphore(EXTRACT_PARALLEL)
 
     fun cancel() {
         cancelled = true
@@ -118,7 +111,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             .isSuccess
         ariaExe = if (ariaOk) setupAriaLink() else null
         log(String.format(Locale.US, "Khởi tạo: %.1fs", secs(tAll)))
-        log("CPU: $cores nhân · " + if (cookieSrc != null) "dùng cookies YouTube đã đăng nhập" else "chưa đăng nhập YouTube")
+        log("CPU: $cores nhân")
 
         // Kiểm tra cập nhật yt-dlp tối đa 1 lần / 12 giờ
         if (System.currentTimeMillis() - prefs.getLong("ytdlpUpdate", 0) > 12 * 3600_000L) {
@@ -141,7 +134,6 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             addOption("--yes-playlist")
             addOption("--ignore-errors")
             addOption("--cache-dir", ytCache.absolutePath)
-            cookieCopy("list")?.let { addOption("--cookies", it.absolutePath) }
             addOption("--print", "%(playlist_title|)s\t%(id)s\t%(title)s\t%(playlist_uploader|)s\t%(duration|0)s")
             addOption("-I", if (p.count > 0) "${p.from}:${p.from + p.count - 1}" else "${p.from}:")
         }
@@ -168,7 +160,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         val raws = downloadAll(entries, dir, ariaOk)
         checkCancel()
         if (raws.isEmpty()) throw Exception(
-            if (botBlocked) "YouTube đang chặn (bắt xác minh bot). Bấm \"Đăng nhập YouTube\" rồi chạy lại, hoặc đổi mạng (wifi ↔ 4G)."
+            if (botBlocked) "YouTube đang chặn (bắt xác minh bot). Đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ rồi chạy lại."
             else "Không tải được video nào")
 
         val valid = raws.filter { keepOf(it) > 1 }.sortedBy { it.entry.n }
@@ -347,8 +339,7 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                             val sp = restartReq.remove(n)
                             val why = ex.message?.lines()?.lastOrNull { it.isNotBlank() }?.take(150)
                             if (!cancelled && isBot(ex.message)) {
-                                if (!botBlocked) log("$tag YouTube bắt xác minh bot → dừng gửi yêu cầu mới" +
-                                    if (cookieSrc == null) ". Hãy bấm \"Đăng nhập YouTube\"." else " (cookies có thể đã hết hạn, đăng nhập lại).")
+                                if (!botBlocked) log("$tag YouTube bắt xác minh bot → dừng gửi yêu cầu mới. Đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ rồi chạy lại.")
                                 botBlocked = true
                                 throw Exception("YouTube chặn bot")
                             }
@@ -411,7 +402,6 @@ class Pipeline(private val ctx: Context, private val p: Params) {
             })
             addOption("--no-playlist")
             addOption("--cache-dir", ytCache.absolutePath)
-            cookieCopy("dl${e.n}")?.let { addOption("--cookies", it.absolutePath) }
             addOption("--no-mtime")
             addOption("--retries", "10")
             addOption("--fragment-retries", "10")
@@ -647,7 +637,6 @@ class Pipeline(private val ctx: Context, private val p: Params) {
         const val MAX_PARALLEL_DOWNLOADS = 10
         /** Số video lấy thông tin cùng lúc. 10 cùng lúc làm YouTube nghi là bot -> giảm còn 3. */
         const val EXTRACT_PARALLEL = 1
-        const val EXTRACT_PARALLEL_LOGGED_IN = 2
         const val MAX_RESTARTS = 3
         const val THROTTLE_WARMUP_MS = 8_000L   // bỏ qua mấy giây đầu (tốc độ chưa ổn định)
         const val THROTTLE_HOLD_MS = 6_000L     // chậm liên tục bấy lâu mới tải lại

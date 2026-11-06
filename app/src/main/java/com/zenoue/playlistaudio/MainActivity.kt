@@ -55,14 +55,6 @@ class MainActivity : AppCompatActivity() {
             }
             prefs.edit().remove("saveTree").remove("saveLabel").apply()
             showSave()
-        findViewById<View>(R.id.cookieLogin).setOnClickListener {
-            if (JobState.running.value) return@setOnClickListener toast("Đang chạy, dừng trước đã")
-            runCatching { startActivity(Intent(this, LoginActivity::class.java)) }
-                .onFailure { toast("Không mở được trang đăng nhập: ${it.message}") }
-        }
-        findViewById<View>(R.id.cookieClear).setOnClickListener {
-            CookieStore.clear(this); showCookies()
-        }
         }
         showSave()
     }
@@ -234,18 +226,6 @@ class MainActivity : AppCompatActivity() {
         findViewById<TextView>(R.id.saveLabel).text =
             "Lưu vào: " + (if (custom) prefs.getString("saveLabel", "") else Params.DEFAULT_SAVE_LABEL)
         findViewById<View>(R.id.saveClear).visibility = if (custom) View.VISIBLE else View.GONE
-    }
-
-    override fun onResume() {
-        super.onResume()
-        showCookies()
-    }
-
-    private fun showCookies() {
-        val has = CookieStore.hasCookies(this)
-        findViewById<TextView>(R.id.cookieLabel).text = if (has) "YouTube: đã đăng nhập ✓" else "YouTube: chưa đăng nhập"
-        findViewById<View>(R.id.cookieClear).visibility = if (has) View.VISIBLE else View.GONE
-        (findViewById<Button>(R.id.cookieLogin)).text = if (has) "Đăng nhập lại" else "Đăng nhập YouTube"
     }
 
     private fun hasCustomCover() = prefs.getBoolean("customCover", false) && coverFile.exists()

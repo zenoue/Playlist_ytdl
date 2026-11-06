@@ -26,8 +26,7 @@ App nghe gợi ý (nhẹ, không quảng cáo, nhớ vị trí đang nghe): **Vo
 - Mỗi lần chạy app tự cập nhật yt-dlp mới nhất.
 
 ## Bị YouTube chặn ("Sign in to confirm you're not a bot")
-Bấm **Đăng nhập YouTube** trong app (nên dùng tài khoản phụ) → đăng nhập → **Xong, lưu cookies**. App ghi cookies.txt (Netscape) từ WebView rồi truyền cho yt-dlp (`--cookies`). Cách làm tham khảo ý tưởng của [YTDLnis](https://github.com/deniscerri/ytdlnis) (mở `robots.txt` trước khi lưu để cookies sống lâu hơn), mã được viết lại, không sao chép.
-App chỉ cho 3 video lấy thông tin cùng lúc và dừng ngay khi bị chặn để không làm IP bị chặn nặng hơn.
+YouTube chặn theo IP khi bị hỏi quá dồn dập. App lấy thông tin lần lượt từng video (chờ ngẫu nhiên 1–3 s, giống hàng đợi của [YTDLnis](https://github.com/deniscerri/ytdlnis)) và dừng ngay khi bị chặn. Nếu vẫn bị: đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ.
 
 ## Kỹ thuật
 - [youtubedl-android](https://github.com/yausername/youtubedl-android) 0.18.1: đóng gói Python + yt-dlp + ffmpeg + QuickJS (JS runtime yt-dlp cần cho YouTube từ 2025.11).

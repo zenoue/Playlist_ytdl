@@ -151,39 +151,6 @@
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:gravity="center_vertical"
-            android:orientation="horizontal">
-            <TextView
-                android:id="@+id/cookieLabel"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:singleLine="true"
-                android:textSize="12sp" />
-            <ImageButton
-                android:id="@+id/cookieClear"
-                android:layout_width="32dp"
-                android:layout_height="36dp"
-                android:background="?attr/selectableItemBackgroundBorderless"
-                android:contentDescription="Xoá cookies"
-                android:src="@drawable/ic_close"
-                android:visibility="gone" />
-            <com.google.android.material.button.MaterialButton
-                android:id="@+id/cookieLogin"
-                style="@style/Widget.Material3.Button.TextButton"
-                android:layout_width="wrap_content"
-                android:layout_height="36dp"
-                android:insetTop="0dp"
-                android:insetBottom="0dp"
-                android:minWidth="0dp"
-                android:paddingHorizontal="8dp"
-                android:text="Đăng nhập YouTube"
-                android:textSize="12sp" />
-        </LinearLayout>
-
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:orientation="horizontal">
             <com.google.android.material.button.MaterialButton
