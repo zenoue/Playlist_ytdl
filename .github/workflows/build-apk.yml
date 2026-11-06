@@ -2,7 +2,8 @@ name: Build APK
 
 on:
   push:
-    paths-ignore: ["**.md"]
+    # sửa riêng engine/ không cần build APK: app tự tải engine mới mỗi lần chạy
+    paths-ignore: ["**.md", "engine/**"]
   workflow_dispatch:
 
 permissions:

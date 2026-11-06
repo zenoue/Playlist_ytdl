@@ -28,6 +28,10 @@ App nghe gợi ý (nhẹ, không quảng cáo, nhớ vị trí đang nghe): **Vo
 ## Bị YouTube chặn ("Sign in to confirm you're not a bot")
 YouTube chặn theo IP khi bị hỏi quá dồn dập. App lấy thông tin lần lượt từng video (chờ ngẫu nhiên 1–3 s, giống hàng đợi của [YTDLnis](https://github.com/deniscerri/ytdlnis)) và dừng ngay khi bị chặn. Nếu vẫn bị: đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ.
 
+## Cập nhật không cần build lại (engine)
+Toàn bộ phần xử lý (đọc playlist, tải, cắt, ghép, tăng tốc, ảnh bìa) nằm trong [`engine/pipeline.py`](engine/pipeline.py), chạy bằng Python có sẵn trong app. Mỗi lần bấm **Bắt đầu**, app tải bản mới nhất của file này từ GitHub (lỗi mạng thì dùng bản đã lưu, cuối cùng là bản đóng gói trong APK). Sửa engine + push là xong: GitHub Actions **không** build APK cho thay đổi chỉ trong `engine/`.
+Chỉ khi đổi giao diện / quyền / thư viện mới cần APK mới (app tự báo cập nhật).
+
 ## Kỹ thuật
 - [youtubedl-android](https://github.com/yausername/youtubedl-android) 0.18.1: đóng gói Python + yt-dlp + ffmpeg + QuickJS (JS runtime yt-dlp cần cho YouTube từ 2025.11).
 - Xử lý: (1) cắt + ghép **không mã hoá** bằng concat demuxer `inpoint/outpoint` + `-c copy` → 1 file; (2) tăng tốc file đó: chia đều thành N đoạn (N = số nhân), mỗi nhân `atempo` + LAME, nối lại bằng copy. Tăng tốc bắt buộc phải mã hoá lại; muốn không mã hoá thì bật *Không mã hoá* và chỉnh tốc độ trong app nghe.
