@@ -56,7 +56,9 @@ class MainActivity : AppCompatActivity() {
             prefs.edit().remove("saveTree").remove("saveLabel").apply()
             showSave()
         findViewById<View>(R.id.cookieLogin).setOnClickListener {
-            if (!JobState.running.value) startActivity(Intent(this, LoginActivity::class.java))
+            if (JobState.running.value) return@setOnClickListener toast("Đang chạy, dừng trước đã")
+            runCatching { startActivity(Intent(this, LoginActivity::class.java)) }
+                .onFailure { toast("Không mở được trang đăng nhập: ${it.message}") }
         }
         findViewById<View>(R.id.cookieClear).setOnClickListener {
             CookieStore.clear(this); showCookies()

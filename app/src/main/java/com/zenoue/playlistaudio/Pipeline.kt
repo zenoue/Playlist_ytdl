@@ -46,7 +46,10 @@ class Pipeline(private val ctx: Context, private val p: Params) {
     @Volatile private var botBlocked = false
     private fun isBot(msg: String?) = msg?.contains("not a bot") == true || msg?.contains("Sign in to confirm") == true
     /** Chỉ cho tối đa EXTRACT_PARALLEL video cùng lúc ở bước lấy thông tin (bước gửi nhiều request tới YouTube). */
-    private val extractSem = java.util.concurrent.Semaphore(EXTRACT_PARALLEL)
+    // Giống YTDLnis: mặc định lần lượt từng video (1 luồng lấy thông tin) + chờ ngẫu nhiên giữa các lần.
+    // Có cookies đăng nhập thì YouTube dễ tính hơn -> cho 2 luồng.
+    private val extractSem = java.util.concurrent.Semaphore(
+        if (CookieStore.hasCookies(ctx)) EXTRACT_PARALLEL_LOGGED_IN else EXTRACT_PARALLEL)
     /** cookies.txt (Netscape) lấy từ đăng nhập YouTube trong app; mỗi tiến trình yt-dlp dùng 1 bản sao riêng. */
     private val cookieSrc = CookieStore.file(ctx).takeIf { it.exists() && it.length() > 0 }
     private fun cookieCopy(tag: String): File? = cookieSrc?.let { src ->
@@ -318,6 +321,8 @@ class Pipeline(private val ctx: Context, private val p: Params) {
                         if (botBlocked) throw Exception("bỏ qua vì YouTube đang chặn bot")
                         extractSem.acquire()
                         var semHeld = true
+                        // chờ ngẫu nhiên 1–3 s trước mỗi lần hỏi YouTube, tránh dồn dập như bot
+                        if (n > 0 || attempt > 0) Thread.sleep((1000 + Math.random() * 2000).toLong())
                         fun releaseSem() { if (semHeld) { semHeld = false; extractSem.release() } }
                         flowingSince.remove(n); slowSince.remove(n); speed.remove(n)
                         try {
@@ -641,7 +646,8 @@ class Pipeline(private val ctx: Context, private val p: Params) {
     companion object {
         const val MAX_PARALLEL_DOWNLOADS = 10
         /** Số video lấy thông tin cùng lúc. 10 cùng lúc làm YouTube nghi là bot -> giảm còn 3. */
-        const val EXTRACT_PARALLEL = 3
+        const val EXTRACT_PARALLEL = 1
+        const val EXTRACT_PARALLEL_LOGGED_IN = 2
         const val MAX_RESTARTS = 3
         const val THROTTLE_WARMUP_MS = 8_000L   // bỏ qua mấy giây đầu (tốc độ chưa ổn định)
         const val THROTTLE_HOLD_MS = 6_000L     // chậm liên tục bấy lâu mới tải lại

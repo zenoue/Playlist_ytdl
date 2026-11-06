@@ -21,6 +21,18 @@ object CookieStore {
         CookieManager.getInstance().flush()
     }
 
+    /** Nhập cookies.txt có sẵn (xuất từ trình duyệt / app khác). Trả về số dòng cookie YouTube. */
+    fun import(ctx: Context, text: String): Int {
+        val lines = text.lines().filter { l ->
+            val f = l.split('\t')
+            f.size >= 7 && !l.startsWith("#") || l.startsWith("#HttpOnly_")
+        }
+        val yt = lines.count { it.contains("youtube.com") }
+        if (yt == 0) throw Exception("Không thấy cookie youtube.com trong nội dung (cần định dạng Netscape cookies.txt)")
+        file(ctx).writeText("# Netscape HTTP Cookie File\n" + lines.joinToString("\n") + "\n")
+        return yt
+    }
+
     /** Ghi cookies.txt, trả về số cookie đã ghi. */
     fun export(ctx: Context): Int {
         CookieManager.getInstance().flush()
