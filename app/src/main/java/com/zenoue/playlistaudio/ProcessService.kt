@@ -38,7 +38,8 @@ class ProcessService : Service() {
             return START_NOT_STICKY
         }
         if (JobState.running.value) return START_NOT_STICKY
-        val params = intent?.extras?.let { Params.from(it) } ?: run { stopSelf(); return START_NOT_STICKY }
+        val params = intent?.getStringExtra("params")?.let { runCatching { org.json.JSONObject(it) }.getOrNull() }
+            ?: run { stopSelf(); return START_NOT_STICKY }
 
         createChannel()
         ServiceCompat.startForeground(
@@ -63,7 +64,8 @@ class ProcessService : Service() {
         scope.launch {
             val msg = try {
                 val files = p.run()
-                "Hoàn thành ${files.size} file → ${params.saveLabel}"
+                if (params.optString("mode") == "tag") "Đã ghi ảnh bìa / thông tin"
+                else "Hoàn thành ${files.size} file → " + params.optString("saveLabel").ifEmpty { "Download/PlaylistAudio" }
             } catch (e: CancelledByUser) {
                 "Đã dừng"
             } catch (e: Throwable) {

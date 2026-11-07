@@ -20,7 +20,9 @@ class CancelledByUser : Exception("Đã dừng")
  * Engine được tải từ GitHub mỗi lần chạy -> sửa engine + push là app dùng ngay, không cần build lại APK.
  * Thứ tự lấy engine: server -> bản đã lưu lần trước -> bản đóng gói trong APK.
  */
-class Engine(private val ctx: Context, private val p: Params) {
+class Engine(private val ctx: Context, private val ui: JSONObject) {
+    private val saveTree = ui.optString("saveTree")
+    private val saveLabel = ui.optString("saveLabel").ifEmpty { "Download/PlaylistAudio" }
 
     @Volatile private var cancelled = false
     @Volatile private var proc: Process? = null
@@ -61,10 +63,8 @@ class Engine(private val ctx: Context, private val p: Params) {
 
         val work = File(ctx.getExternalFilesDir(null) ?: ctx.filesDir, "work").apply { mkdirs() }
         val out = File(ctx.cacheDir, "engine_out").apply { deleteRecursively(); mkdirs() }
-        val params = JSONObject().apply {
-            put("url", p.url); put("from", p.from); put("count", p.count)
-            put("trimStart", p.trimStart); put("trimEnd", p.trimEnd); put("speed", p.speed)
-            put("group", p.group); put("mono", p.mono); put("copyMode", p.copyMode); put("cover", p.coverPath)
+        // tham số giao diện gửi sang + đường dẫn do app cung cấp
+        val params = JSONObject(ui.toString()).apply {
             put("ytdlp", File(ctx.noBackupFilesDir, "youtubedl-android/yt-dlp/yt-dlp").absolutePath)
             put("ffmpeg", File(libDir, "libffmpeg.so").absolutePath)
             put("qjs", File(libDir, "libqjs.so").absolutePath)
@@ -110,8 +110,12 @@ class Engine(private val ctx: Context, private val p: Params) {
                 "FILE" -> {
                     val f = body.split('\t')
                     val src = File(f[0])
-                    try { saved += export(src, f.getOrElse(1) { src.name }, f.getOrElse(2) { "audio/mpeg" }) }
-                    catch (e: Exception) { log("LỖI lưu file: ${e.message}") }
+                    val name = f.getOrElse(1) { src.name }
+                    val target = f.getOrElse(3) { "" }
+                    try {
+                        saved += if (target.startsWith("uri:")) overwrite(src, target.substring(4), name, f.getOrElse(2) { "audio/mpeg" })
+                        else export(src, name, f.getOrElse(2) { "audio/mpeg" })
+                    } catch (e: Exception) { log("LỖI lưu file: ${e.message}") }
                     finally { src.delete() }
                 }
             }
@@ -167,15 +171,24 @@ class Engine(private val ctx: Context, private val p: Params) {
         log("aria2c không dùng được (${e.message?.take(80)})"); null
     }
 
+    /** Ghi đè file gốc (sửa tag); không được thì lưu thành file mới. */
+    private fun overwrite(src: File, uri: String, name: String, mime: String): String = try {
+        ctx.contentResolver.openOutputStream(android.net.Uri.parse(uri), "wt")!!.use { o -> src.inputStream().use { it.copyTo(o) } }
+        log("Đã ghi đè file gốc: $name"); name
+    } catch (e: Exception) {
+        log("Không ghi đè được file gốc (${e.message?.take(80)}) → lưu bản mới")
+        export(src, name, mime)
+    }
+
     /** Lưu vào thư mục người dùng chọn, mặc định Download/PlaylistAudio. */
     private fun export(src: File, name: String, mime: String): String {
-        if (p.saveTree.isNotEmpty()) {
-            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, android.net.Uri.parse(p.saveTree))
-            if (tree == null || !tree.canWrite()) throw Exception("Không ghi được vào thư mục ${p.saveLabel}. Hãy chọn lại thư mục lưu.")
+        if (saveTree.isNotEmpty()) {
+            val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(ctx, android.net.Uri.parse(saveTree))
+            if (tree == null || !tree.canWrite()) throw Exception("Không ghi được vào thư mục $saveLabel. Hãy chọn lại thư mục lưu.")
             tree.findFile(name)?.delete()
-            val f = tree.createFile(mime, name) ?: throw Exception("Không tạo được file trong ${p.saveLabel}")
+            val f = tree.createFile(mime, name) ?: throw Exception("Không tạo được file trong $saveLabel")
             ctx.contentResolver.openOutputStream(f.uri)!!.use { o -> src.inputStream().use { it.copyTo(o) } }
-            log("Đã lưu: ${p.saveLabel}/${f.name ?: name}")
+            log("Đã lưu: $saveLabel/${f.name ?: name}")
             return name
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -203,7 +216,7 @@ class Engine(private val ctx: Context, private val p: Params) {
 
     companion object {
         /** Phải khớp ENGINE_API trong engine/pipeline.py */
-        const val ENGINE_API = 1
-        const val ENGINE_URL = "https://raw.githubusercontent.com/zenoue/Playlist_ytdl/HEAD/engine/pipeline.py"
+        const val ENGINE_API = 2
+        const val ENGINE_URL = "https://raw.githubusercontent.com/zenoue/Playlist_ytdl/main/engine/pipeline.py"
     }
 }

@@ -3,7 +3,7 @@
 App Android: dán link playlist YouTube → tải audio → **cắt đầu / cắt cuối** → **tăng tốc** → **gộp mỗi N video thành 1 file mp3**. Mọi thứ chạy trên điện thoại (dùng mạng của máy nên không bị YouTube chặn như máy chủ).
 
 ## Tải APK
-Mỗi lần build tự tăng số beta (beta_2, beta_3, …). Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-arm64-v8a-<phiên bản>.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
+Vào **[Releases](../../releases/latest)** → tải `PlaylistAudio-<phiên bản>.apk` (hầu hết điện thoại) → mở để cài (cho phép "Cài ứng dụng không rõ nguồn gốc").
 
 Mỗi lần push code, GitHub Actions tự build và tạo Release mới. Có thể cài đè bản mới lên bản cũ.
 
@@ -28,9 +28,13 @@ App nghe gợi ý (nhẹ, không quảng cáo, nhớ vị trí đang nghe): **Vo
 ## Bị YouTube chặn ("Sign in to confirm you're not a bot")
 YouTube chặn theo IP khi bị hỏi quá dồn dập. App lấy thông tin lần lượt từng video (chờ ngẫu nhiên 1–3 s, giống hàng đợi của [YTDLnis](https://github.com/deniscerri/ytdlnis)) và dừng ngay khi bị chặn. Nếu vẫn bị: đổi mạng (wifi ↔ 4G) hoặc chờ vài giờ.
 
-## Cập nhật không cần build lại (engine)
-Toàn bộ phần xử lý (đọc playlist, tải, cắt, ghép, tăng tốc, ảnh bìa) nằm trong [`engine/pipeline.py`](engine/pipeline.py), chạy bằng Python có sẵn trong app. Mỗi lần bấm **Bắt đầu**, app tải bản mới nhất của file này từ GitHub (lỗi mạng thì dùng bản đã lưu, cuối cùng là bản đóng gói trong APK). Sửa engine + push là xong: GitHub Actions **không** build APK cho thay đổi chỉ trong `engine/`.
-Chỉ khi đổi giao diện / quyền / thư viện mới cần APK mới (app tự báo cập nhật).
+## Kiến trúc 1.x: khung + cập nhật trực tiếp từ GitHub
+- **APK (khung, 1.0.0)**: WebView + cầu nối (`window.App`: chọn file/ảnh/thư mục, chạy engine, lưu file, lưu cài đặt), dịch vụ chạy nền, tự cập nhật APK. Hầu như không cần đổi.
+- **Giao diện** [`web/index.html`](web/index.html): tải từ nhánh `main` mỗi lần mở app (hiện ngay bản đã lưu, có bản mới thì nạp lại).
+- **Chức năng** [`engine/pipeline.py`](engine/pipeline.py): tải từ nhánh `main` mỗi lần bấm chạy, chạy bằng Python có sẵn trong app.
+- Mất mạng: dùng bản đã lưu, cuối cùng là bản đóng gói trong APK.
+- Sửa `web/` hoặc `engine/` rồi push lên `main` là xong, GitHub Actions không build APK. Chỉ khi đổi Kotlin mới tăng `appVersion` trong `gradle.properties` → Actions build và tạo release `vX.Y.Z`.
+- `UI_API` / `ENGINE_API`: nếu giao diện/engine mới cần khung mới hơn, app giữ bản cũ và nhắc cập nhật app.
 
 ## Kỹ thuật
 - [youtubedl-android](https://github.com/yausername/youtubedl-android) 0.18.1: đóng gói Python + yt-dlp + ffmpeg + QuickJS (JS runtime yt-dlp cần cho YouTube từ 2025.11).

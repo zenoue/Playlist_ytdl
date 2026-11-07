@@ -25,7 +25,18 @@ class Updater(private val act: Activity, private val scope: LifecycleCoroutineSc
 
     private data class Rel(val tag: String, val notes: String, val apkUrl: String, val size: Long)
 
-    private fun betaNum(v: String?) = Regex("beta_(\\d+)").find(v ?: "")?.groupValues?.get(1)?.toIntOrNull()
+    /** "v1.2.3" / "1.2.3" -> [1,2,3]; bản thử nghiệm cũ "beta_N" -> [0,0,N] (luôn cũ hơn 1.0.0). */
+    private fun ver(v: String?): List<Int>? {
+        val s = v ?: return null
+        Regex("beta_(\\d+)").find(s)?.let { return listOf(0, 0, it.groupValues[1].toInt()) }
+        val m = Regex("(\\d+)\\.(\\d+)\\.(\\d+)").find(s) ?: return null
+        return m.groupValues.drop(1).map { it.toInt() }
+    }
+
+    private fun newer(a: List<Int>, b: List<Int>): Boolean {
+        for (i in 0 until 3) if (a[i] != b[i]) return a[i] > b[i]
+        return false
+    }
 
     private fun currentVersion() =
         runCatching { act.packageManager.getPackageInfo(act.packageName, 0).versionName }.getOrNull() ?: ""
@@ -37,9 +48,9 @@ class Updater(private val act: Activity, private val scope: LifecycleCoroutineSc
             if (!silent) toast("Không kiểm tra được cập nhật: ${it.message}")
             return@launch
         }
-        val cur = betaNum(currentVersion())
-        val new = betaNum(r.tag)
-        if (new == null || (cur != null && new <= cur)) {
+        val cur = ver(currentVersion())
+        val new = ver(r.tag)
+        if (new == null || (cur != null && !newer(new, cur))) {
             if (!silent) toast("Đang dùng bản mới nhất (${currentVersion()})")
             return@launch
         }

@@ -9,12 +9,14 @@ Giao tiếp với app qua stdout, mỗi dòng 1 lệnh:
   @@LOG <text>          ghi nhật ký
   @@STATUS <text>       dòng trạng thái
   @@PROGRESS <0..1>     thanh tiến độ
-  @@FILE <path>\t<name>\t<mime>   file kết quả -> app lưu vào thư mục người dùng chọn rồi xoá
+  @@FILE <path>\t<name>\t<mime>[\t<đích>]   file kết quả -> app lưu rồi xoá.
+                        đích: bỏ trống = thư mục lưu người dùng chọn; "uri:<content-uri>" = ghi đè file gốc
   @@ERROR <text>        lỗi (kết thúc)
-Tham số: argv[1] = file JSON do app ghi (xem ENGINE_API).
+Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sang + đường dẫn app thêm vào.
+  mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
 """
-ENGINE_API = 1          # app chỉ chạy engine có cùng API; đổi khi thay đổi giao tiếp với app
-ENGINE_VERSION = "2026.11.07-1"
+ENGINE_API = 2          # app 1.x chạy engine API 2 (tham số từ giao diện chuyển thẳng sang engine)
+ENGINE_VERSION = "1.0.0"
 
 import hashlib
 import json
@@ -31,6 +33,13 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 P = json.load(open(sys.argv[1], encoding="utf-8"))
+for _k, _d in (("from", 1), ("count", 0), ("group", 10)):
+    P[_k] = int(P.get(_k) or _d)
+for _k, _d in (("trimStart", 0.0), ("trimEnd", 0.0), ("speed", 1.0)):
+    P[_k] = float(P.get(_k) or _d)
+for _k in ("mono", "copyMode"):
+    P[_k] = bool(P.get(_k))
+P.setdefault("url", "")
 sys.path.insert(0, P["ytdlp"])          # file yt-dlp (zipapp) do app quản lý / tự cập nhật
 import yt_dlp                            # noqa: E402
 
@@ -159,6 +168,11 @@ def state_set(k, v):
 
 
 # ---------------------------------------------------------------- yt-dlp
+def P_get(k, d=None):
+    v = P.get(k)
+    return d if v in (None, "") else v
+
+
 def base_opts():
     o = {
         "quiet": True, "no_warnings": True, "noprogress": True,
@@ -166,7 +180,7 @@ def base_opts():
     }
     if P.get("qjs") and os.path.exists(P["qjs"]):
         o["js_runtimes"] = {"quickjs": {"path": P["qjs"]}}
-    if P["url"].startswith("file://"):
+    if P.get("url", "").startswith("file://"):
         o["enable_file_urls"] = True     # chỉ dùng khi thử nghiệm
     return o
 
@@ -514,9 +528,62 @@ def main():
     log("TỔNG THỜI GIAN: %.1fs" % secs(T_ALL))
 
 
+MIME = {"mp3": "audio/mpeg", "m4a": "audio/mp4", "mp4": "audio/mp4", "opus": "audio/ogg", "ogg": "audio/ogg",
+        "flac": "audio/flac", "wav": "audio/wav", "mka": "audio/x-matroska", "webm": "audio/webm"}
+
+
+def tag_mode():
+    """Gắn ảnh bìa + thông tin cho 1 file có sẵn (chỉ copy, không mã hoá lại)."""
+    src = P["input"]
+    wdir = os.path.join(P["work"], "tag")
+    shutil.rmtree(wdir, ignore_errors=True)
+    os.makedirs(wdir, exist_ok=True)
+    os.makedirs(P["out"], exist_ok=True)
+    cover_src = None
+    cs = P.get("coverSource", "keep")
+    if cs == "yt":
+        status("Lấy thumbnail từ YouTube…")
+        link = P.get("link", "")
+        o = {**base_opts(), "skip_download": True, "writethumbnail": True,
+             "outtmpl": {"default": os.path.join(wdir, "v.%(ext)s"), "thumbnail": os.path.join(wdir, "thumb.%(ext)s")},
+             "extractor_args": {"youtube": {"player_client": ["visionos"]}}}
+        if "list=" in link:
+            o.update({"noplaylist": False, "playlist_items": str(int(P.get("index") or 1))})
+        else:
+            o["noplaylist"] = True
+        with yt_dlp.YoutubeDL(o) as y:
+            y.extract_info(link, download=True)
+        c = [f for f in os.listdir(wdir) if f.startswith("thumb.")]
+        if not c:
+            raise RuntimeError("Không lấy được thumbnail")
+        cover_src = os.path.join(wdir, c[0])
+    elif cs == "image":
+        cover_src = P.get("coverPath")
+    cover = None
+    if cover_src:
+        cover = os.path.join(wdir, "cover.jpg")
+        ffmpeg(["-i", cover_src, "-frames:v", "1", "-vf", "scale='min(800,iw)':-2", "-q:v", "3", cover])
+    name = P.get("name") or os.path.basename(src)
+    ext = os.path.splitext(name)[1][1:].lower() or "mp3"
+    out = os.path.join(P["out"], "tagged." + ext)
+    args = ["-i", src]
+    args += ["-i", cover, "-map", "0:a", "-map", "1:v"] if cover else ["-map", "0"]
+    args += ["-c", "copy"] + (["-id3v2_version", "3"] if ext == "mp3" else [])
+    for k in ("title", "album", "artist", "track"):
+        args += ["-metadata", "%s=%s" % (k, P.get(k, ""))]
+    if cover:
+        args += ["-disposition:v", "attached_pic", "-metadata:s:v", "title=Album cover",
+                 "-metadata:s:v", "comment=Cover (front)"]
+    status("Ghi thông tin…")
+    ffmpeg(args + [out])
+    emit("FILE", out, name, MIME.get(ext, "audio/mpeg"), ("uri:" + P["inputUri"]) if P.get("inputUri") else "")
+    progress(1.0)
+    log("Đã gắn ảnh bìa / thông tin: %s" % name)
+
+
 if __name__ == "__main__":
     try:
-        main()
+        tag_mode() if P.get("mode") == "tag" else main()
     except Cancelled:
         emit("ERROR", "Đã dừng")
         sys.exit(130)

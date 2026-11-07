@@ -1,13 +1,18 @@
 name: Build APK
 
+# Chỉ build KHUNG app (Kotlin). Giao diện (web/) và chức năng (engine/) app tự tải từ nhánh main.
 on:
   push:
-    # sửa riêng engine/ không cần build APK: app tự tải engine mới mỗi lần chạy
-    paths-ignore: ["**.md", "engine/**"]
+    branches: [main]
+    paths-ignore: ["**.md", "engine/**", "web/**"]
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: build-apk
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -27,35 +32,30 @@ jobs:
 
       - name: Phiên bản
         run: |
-          OFF=$(grep '^betaOffset=' gradle.properties | cut -d= -f2)
-          echo "VER=beta_$(( ${{ github.run_number }} - OFF ))" >> "$GITHUB_ENV"
+          VER=$(grep '^appVersion=' gradle.properties | cut -d= -f2)
+          echo "VER=$VER" >> "$GITHUB_ENV"
+          if git rev-parse "v$VER" >/dev/null 2>&1; then
+            echo "EXISTS=1" >> "$GITHUB_ENV"
+            echo "::notice::Đã có release v$VER — tăng appVersion trong gradle.properties để phát hành bản khung mới"
+          fi
 
       - name: Build APK
-        env:
-          APP_VERSION: ${{ env.VER }}
         run: |
           chmod +x gradlew
           ./gradlew assembleRelease --no-daemon --console=plain
-
-      - name: Đổi tên APK
-        run: |
           mkdir -p dist
-          for f in app/build/outputs/apk/release/*.apk; do
-            abi=$(basename "$f" | sed -E 's/app-(.*)-release\.apk/\1/')
-            cp "$f" "dist/PlaylistAudio-${abi}-${VER}.apk"
-          done
-          ls -la dist
+          cp app/build/outputs/apk/release/app-arm64-v8a-release.apk "dist/PlaylistAudio-${VER}.apk"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: PlaylistAudio-apk-${{ github.run_number }}
+          name: PlaylistAudio-${{ env.VER }}-build${{ github.run_number }}
           path: dist/*.apk
           compression-level: 0
 
-      # Danh sách thay đổi = các commit kể từ bản beta trước
       - name: Danh sách thay đổi
+        if: env.EXISTS != '1'
         run: |
-          PREV=$(git tag --list 'beta_*' --sort=-v:refname | head -1)
+          PREV=$(git tag --list 'v*' 'beta_*' --sort=-creatordate | head -1)
           RANGE="${PREV:+$PREV..}HEAD"
           {
             echo "## Thay đổi${PREV:+ kể từ $PREV}"
@@ -64,16 +64,17 @@ jobs:
               | grep -v -E '^(Co-Authored-By|Claude-Session):' | cat -s
             echo
             echo "---"
-            echo "Cài: tải file **PlaylistAudio-arm64-v8a-${VER}.apk** bên dưới, hoặc mở app → bấm số phiên bản để tự cập nhật."
+            echo "Cài: tải **PlaylistAudio-${VER}.apk** bên dưới. Giao diện và chức năng tự cập nhật từ GitHub, không cần cài lại."
           } > notes.md
           cat notes.md
 
-      # Đăng lên Releases để tải thẳng trên điện thoại (không cần giải nén zip)
       - name: Release
+        if: env.EXISTS != '1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${VER}" dist/*.apk \
+          gh release create "v${VER}" dist/*.apk \
             --target "${{ github.sha }}" \
             --title "Playlist Audio ${VER}" \
-            --notes-file notes.md
+            --notes-file notes.md \
+            --latest

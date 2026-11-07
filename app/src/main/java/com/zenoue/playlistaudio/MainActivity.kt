@@ -1,21 +1,23 @@
 package com.zenoue.playlistaudio
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.widget.Button
-import android.view.View
-import android.widget.EditText
-import android.widget.ScrollView
-import android.widget.ImageView
-import android.graphics.BitmapFactory
-import androidx.activity.result.contract.ActivityResultContracts
-import java.io.File
-import android.widget.TextView
+import android.provider.OpenableColumns
+import android.util.Base64
+import android.webkit.JavascriptInterface
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -23,122 +25,59 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import com.google.android.material.progressindicator.LinearProgressIndicator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONObject
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.net.HttpURLConnection
+import java.net.URL
 
+/**
+ * KHUNG app 1.x: chỉ là WebView + cầu nối. Giao diện (web/index.html) và chức năng (engine/pipeline.py)
+ * đều tải từ GitHub nhánh main -> sửa & push là app đổi theo, không cần build lại APK.
+ */
 class MainActivity : AppCompatActivity() {
 
-    private lateinit var url: EditText
-    private lateinit var from: EditText
-    private lateinit var count: EditText
-    private lateinit var trimStart: EditText
-    private lateinit var trimEnd: EditText
-    private lateinit var speed: EditText
-    private lateinit var group: EditText
-    private lateinit var run: Button
-    private lateinit var mono: android.widget.CheckBox
-    private lateinit var copyMode: android.widget.CheckBox
+    private lateinit var web: WebView
+    private val prefs by lazy { getSharedPreferences("ui", Context.MODE_PRIVATE) }
+    private var pendingPick: String? = null
+    private var pendingShare: String? = null
+    private var pageReady = false
 
-    private val coverFile by lazy { File(filesDir, "custom_cover") }
-    private val pickCover = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        uri ?: return@registerForActivityResult
-        runCatching {
-            contentResolver.openInputStream(uri)!!.use { i -> coverFile.outputStream().use { i.copyTo(it) } }
-            prefs.edit().putBoolean("customCover", true).apply()
-        }.onFailure { toast("Không đọc được ảnh") }
-        showCover()
-        findViewById<View>(R.id.savePick).setOnClickListener { if (!JobState.running.value) pickSave.launch(null) }
-        findViewById<View>(R.id.saveClear).setOnClickListener {
-            prefs.getString("saveTree", null)?.let { t ->
-                runCatching { contentResolver.releasePersistableUriPermission(android.net.Uri.parse(t),
-                    Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION) }
-            }
-            prefs.edit().remove("saveTree").remove("saveLabel").apply()
-            showSave()
-        }
-        showSave()
-    }
+    // ---------- chọn file (kết quả gửi lại giao diện qua window.__onPick) ----------
+    private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri -> onPicked(uri, "image") }
+    private val pickAudio = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> onPicked(uri, "audio") }
+    private val pickFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri -> onPicked(uri, "folder") }
 
-    private val pickSave = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
-        uri ?: return@registerForActivityResult
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-            prefs.edit().putString("saveTree", uri.toString()).putString("saveLabel", treeLabel(uri)).apply()
-        }.onFailure { toast("Không lấy được quyền ghi thư mục") }
-        showSave()
-    }
-
-    private val prefs by lazy { getSharedPreferences("last", Context.MODE_PRIVATE) }
-
+    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
-        url = findViewById(R.id.url)
-        from = findViewById(R.id.from)
-        count = findViewById(R.id.count)
-        trimStart = findViewById(R.id.trimStart)
-        trimEnd = findViewById(R.id.trimEnd)
-        speed = findViewById(R.id.speed)
-        group = findViewById(R.id.group)
-        run = findViewById(R.id.run)
-        mono = findViewById(R.id.mono)
-        copyMode = findViewById(R.id.copyMode)
-        val status = findViewById<TextView>(R.id.status)
-        val log = findViewById<TextView>(R.id.log)
-        val progress = findViewById<LinearProgressIndicator>(R.id.progress)
-        val scroll = findViewById<ScrollView>(R.id.logScroll)
-
-        // Android 15 vẽ tràn viền: chừa chỗ cho thanh trạng thái / thanh điều hướng / bàn phím
         ViewCompat.setOnApplyWindowInsetsListener(findViewById(R.id.root)) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
-            insets
+            val b = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.ime())
+            v.setPadding(b.left, b.top, b.right, b.bottom); insets
         }
-
-        url.setText(prefs.getString("url", ""))
-        from.setText(prefs.getString("from", "1"))
-        count.setText(prefs.getString("count", "10"))
-        trimStart.setText(prefs.getString("trimStart", "10"))
-        trimEnd.setText(prefs.getString("trimEnd", "30"))
-        speed.setText(prefs.getString("speed", "1.25"))
-        group.setText(prefs.getString("group", "10"))
-        mono.isChecked = prefs.getBoolean("mono", true)
-        copyMode.isChecked = prefs.getBoolean("copyMode", false)
-        // Không mã hoá: giữ nguyên âm thanh gốc nên tốc độ / mono không áp dụng (chỉnh tốc độ trong app nghe)
-        fun syncCopy() {
-            val on = copyMode.isChecked
-            speed.isEnabled = !on && !JobState.running.value
-            mono.isEnabled = !on && !JobState.running.value
+        web = findViewById(R.id.web)
+        web.settings.javaScriptEnabled = true
+        web.settings.domStorageEnabled = true
+        web.addJavascriptInterface(Bridge(), "App")
+        web.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                pageReady = true
+                pushState(force = true)
+                pendingShare?.let { js("__onShare", JSONObject.quote(it)); pendingShare = null }
+            }
         }
-        copyMode.setOnCheckedChangeListener { _, _ -> syncCopy() }
-        syncCopy()
         handleShare(intent)
-        findViewById<TextView>(R.id.version).apply {
-            text = (runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "") + " ⟳"
-            // bấm số phiên bản = kiểm tra cập nhật
-            setOnClickListener { Updater(this@MainActivity, lifecycleScope).check(silent = false) }
-        }
-        // tự kiểm tra bản mới mỗi lần mở app (im lặng nếu không có)
-        if (savedInstanceState == null) Updater(this, lifecycleScope).check(silent = true)
-        findViewById<ImageView>(R.id.coverPreview).setOnClickListener {
-            if (!JobState.running.value) pickCover.launch("image/*")
-        }
-        findViewById<View>(R.id.coverClear).setOnClickListener {
-            prefs.edit().putBoolean("customCover", false).apply()
-            coverFile.delete()
-            showCover()
-        }
-        showCover()
-
-        findViewById<Button>(R.id.openTag).setOnClickListener {
-            startActivity(Intent(this, TagActivity::class.java).putExtra("link", url.text.toString().trim()))
-        }
-
-        run.setOnClickListener {
-            if (JobState.running.value) {
-                startService(Intent(this, ProcessService::class.java).setAction(ProcessService.ACTION_STOP))
-            } else start()
+        // 1) hiện ngay bản giao diện đã lưu (hoặc bản đóng gói)  2) tải bản mới, khác thì nạp lại
+        loadUi(UiStore.cachedOrBundled(this))
+        lifecycleScope.launch {
+            val fresh = withContext(Dispatchers.IO) { UiStore.fetch(this@MainActivity) }
+            if (fresh != null) loadUi(fresh)
         }
 
         if (Build.VERSION.SDK_INT >= 33 &&
@@ -148,26 +87,36 @@ class MainActivity : AppCompatActivity() {
             ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
         ) requestPermissions(arrayOf(Manifest.permission.WRITE_EXTERNAL_STORAGE), 2)
 
+        if (savedInstanceState == null) Updater(this, lifecycleScope).check(silent = true)
+
+        // đẩy trạng thái (đang chạy / tiến độ / nhật ký) sang giao diện, tối đa ~4 lần/giây
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                launch { JobState.status.collect { status.text = it } }
-                launch { JobState.progress.collect { progress.setProgressCompat(it, true) } }
-                launch {
-                    JobState.running.collect {
-                        run.text = if (it) "Dừng" else "Bắt đầu"
-                        listOf(url, from, count, trimStart, trimEnd, group, copyMode, findViewById<View>(R.id.coverPreview), findViewById<View>(R.id.coverClear), findViewById<View>(R.id.savePick), findViewById<View>(R.id.saveClear)).forEach { v -> v.isEnabled = !it }
-                        speed.isEnabled = !it && !copyMode.isChecked
-                        mono.isEnabled = !it && !copyMode.isChecked
-                    }
-                }
-                launch {
-                    JobState.log.collect {
-                        log.text = it
-                        scroll.post { scroll.fullScroll(ScrollView.FOCUS_DOWN) }
-                    }
-                }
+                combine(JobState.running, JobState.status, JobState.progress, JobState.log) { _, _, _, _ -> }
+                    .collect { pushState(); delay(250) }
             }
         }
+    }
+
+    private fun loadUi(html: String) {
+        pageReady = false
+        web.loadDataWithBaseURL("https://playlist-audio.app/", html, "text/html", "utf-8", null)
+    }
+
+    private fun js(fn: String, vararg args: String) {
+        if (!pageReady) return
+        web.evaluateJavascript("window.$fn && window.$fn(${args.joinToString(",")})", null)
+    }
+
+    private fun pushState(force: Boolean = false) {
+        if (!pageReady && !force) return
+        val s = JSONObject().apply {
+            put("running", JobState.running.value)
+            put("status", JobState.status.value)
+            put("progress", JobState.progress.value)
+            put("log", JobState.log.value)
+        }
+        js("__onState", s.toString())
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -176,77 +125,148 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleShare(i: Intent?) {
-        if (i?.action != Intent.ACTION_SEND || JobState.running.value) return
+        if (i?.action != Intent.ACTION_SEND) return
         val text = i.getStringExtra(Intent.EXTRA_TEXT) ?: return
-        Regex("https?://\\S+").find(text)?.let { url.setText(it.value) }
+        if (pageReady) js("__onShare", JSONObject.quote(text)) else pendingShare = text
     }
 
-    private fun start() {
-        val link = url.text.toString().trim()
-        if (!link.startsWith("http")) return toast("Dán link YouTube trước")
-        val params = try {
-            Params(
-                url = link,
-                from = from.text.toString().ifBlank { "1" }.toInt().coerceAtLeast(1),
-                count = count.text.toString().ifBlank { "0" }.toInt().coerceAtLeast(0),
-                trimStart = Params.parseTime(trimStart.text.toString()),
-                trimEnd = Params.parseTime(trimEnd.text.toString()),
-                speed = speed.text.toString().replace(',', '.').ifBlank { "1" }.toDouble(),
-                group = group.text.toString().ifBlank { "10" }.toInt().coerceAtLeast(1),
-                mono = mono.isChecked,
-                copyMode = copyMode.isChecked,
-                coverPath = if (hasCustomCover()) coverFile.absolutePath else "",
-                saveTree = prefs.getString("saveTree", "") ?: "",
-                saveLabel = prefs.getString("saveLabel", null) ?: Params.DEFAULT_SAVE_LABEL,
-            )
-        } catch (e: Exception) {
-            return toast("Giá trị nhập không hợp lệ")
+    private fun onPicked(uri: Uri?, kind: String) {
+        val id = pendingPick ?: return
+        pendingPick = null
+        if (uri == null) return
+        lifecycleScope.launch {
+            val r = withContext(Dispatchers.IO) { runCatching { describe(uri, kind) }.getOrNull() }
+            if (r == null) toast("Không đọc được file") else js("__onPick", JSONObject.quote(id), r.toString())
         }
-        if (params.speed < 0.5 || params.speed > 4) return toast("Tốc độ nên trong khoảng 0.5 – 4")
-        if (params.trimStart < 0 || params.trimEnd < 0) return toast("Thời gian cắt không được âm")
-
-        prefs.edit()
-            .putString("url", link).putString("from", from.text.toString())
-            .putString("count", count.text.toString()).putString("trimStart", trimStart.text.toString())
-            .putString("trimEnd", trimEnd.text.toString()).putString("speed", speed.text.toString())
-            .putString("group", group.text.toString()).putBoolean("mono", mono.isChecked).putBoolean("copyMode", copyMode.isChecked).apply()
-
-        ContextCompat.startForegroundService(
-            this, Intent(this, ProcessService::class.java).putExtras(params.toBundle())
-        )
     }
 
-    /** content://…/tree/primary%3AMusic%2FTruyen -> "Music/Truyen" */
-    private fun treeLabel(uri: android.net.Uri): String {
-        val id = runCatching { android.provider.DocumentsContract.getTreeDocumentId(uri) }.getOrNull() ?: return uri.toString()
-        val vol = id.substringBefore(':')
-        val path = id.substringAfter(':', "")
-        val root = if (vol == "primary") "Bộ nhớ trong" else "Thẻ nhớ"
-        return if (path.isEmpty()) root else path
+    /** Chép file đã chọn vào bộ nhớ app (engine Python chỉ đọc được đường dẫn thật) và mô tả cho giao diện. */
+    private fun describe(uri: Uri, kind: String): JSONObject {
+        val o = JSONObject()
+        if (kind == "folder") {
+            contentResolver.takePersistableUriPermission(uri,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+            val id = android.provider.DocumentsContract.getTreeDocumentId(uri)
+            val path = id.substringAfter(':', "")
+            o.put("uri", uri.toString())
+            o.put("label", path.ifEmpty { if (id.startsWith("primary")) "Bộ nhớ trong" else "Thẻ nhớ" })
+            return o
+        }
+        var name = if (kind == "image") "image" else "audio.mp3"
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+            if (it.moveToFirst()) name = it.getString(0) ?: name
+        }
+        // ảnh bìa riêng giữ lâu dài (filesDir); file audio sửa tag chỉ cần tạm (cacheDir)
+        val dir = File(if (kind == "image") filesDir else cacheDir, "picks").apply { mkdirs() }
+        if (kind == "audio") dir.listFiles()?.forEach { it.delete() }
+        val f = File(dir, "${kind}_${System.currentTimeMillis()}_" + name.replace(Regex("[^\\w.\\-]"), "_"))
+        contentResolver.openInputStream(uri)!!.use { i -> f.outputStream().use { i.copyTo(it) } }
+        o.put("path", f.absolutePath); o.put("name", name); o.put("uri", uri.toString())
+        if (kind == "image") {
+            o.put("preview", thumbDataUrl(BitmapFactory.decodeFile(f.absolutePath, sampled(f))))
+        } else {
+            val r = MediaMetadataRetriever()
+            try {
+                r.setDataSource(f.absolutePath)
+                o.put("title", r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE) ?: "")
+                o.put("album", r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM) ?: "")
+                o.put("artist", r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST) ?: "")
+                o.put("track", r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER) ?: "")
+                r.embeddedPicture?.let { o.put("preview", thumbDataUrl(BitmapFactory.decodeByteArray(it, 0, it.size))) }
+            } catch (_: Exception) {
+            } finally { runCatching { r.release() } }
+        }
+        return o
     }
 
-    private fun showSave() {
-        val custom = prefs.getString("saveTree", null) != null
-        findViewById<TextView>(R.id.saveLabel).text =
-            "Lưu vào: " + (if (custom) prefs.getString("saveLabel", "") else Params.DEFAULT_SAVE_LABEL)
-        findViewById<View>(R.id.saveClear).visibility = if (custom) View.VISIBLE else View.GONE
+    private fun sampled(f: File): BitmapFactory.Options {
+        val b = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(f.absolutePath, b)
+        var s = 1
+        while (b.outWidth / s > 400 || b.outHeight / s > 400) s *= 2
+        return BitmapFactory.Options().apply { inSampleSize = s }
     }
 
-    private fun hasCustomCover() = prefs.getBoolean("customCover", false) && coverFile.exists()
-
-    private fun showCover() {
-        val iv = findViewById<ImageView>(R.id.coverPreview)
-        val custom = hasCustomCover()
-        findViewById<TextView>(R.id.coverLabel).text = if (custom) "Ảnh riêng" else "Ảnh bìa"
-        findViewById<View>(R.id.coverClear).visibility = if (custom) View.VISIBLE else View.GONE
-        if (!custom) { iv.setImageResource(R.drawable.ic_image); return }
-        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(coverFile.absolutePath, o)
-        var sample = 1
-        while (o.outWidth / sample > 256 || o.outHeight / sample > 256) sample *= 2
-        iv.setImageBitmap(BitmapFactory.decodeFile(coverFile.absolutePath,
-            BitmapFactory.Options().apply { inSampleSize = sample }))
+    private fun thumbDataUrl(bmp: Bitmap?): String {
+        bmp ?: return ""
+        val out = ByteArrayOutputStream()
+        bmp.compress(Bitmap.CompressFormat.JPEG, 80, out)
+        return "data:image/jpeg;base64," + Base64.encodeToString(out.toByteArray(), Base64.NO_WRAP)
     }
 
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
+
+    /** Các hàm giao diện web gọi được qua window.App.* (chạy trên luồng nền của WebView). */
+    inner class Bridge {
+        @JavascriptInterface fun info(): String = JSONObject().apply {
+            put("app", runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "")
+            put("ui", UiStore.source)
+            put("cores", Runtime.getRuntime().availableProcessors())
+            put("sdk", Build.VERSION.SDK_INT)
+        }.toString()
+
+        @JavascriptInterface fun prefGet(key: String): String = prefs.getString(key, "") ?: ""
+        @JavascriptInterface fun prefSet(key: String, value: String) { prefs.edit().putString(key, value).apply() }
+
+        /** Chạy engine với tham số JSON từ giao diện (engine/pipeline.py đọc). */
+        @JavascriptInterface fun run(params: String) = runOnUiThread {
+            if (JobState.running.value) return@runOnUiThread toast("Đang chạy")
+            ContextCompat.startForegroundService(this@MainActivity,
+                Intent(this@MainActivity, ProcessService::class.java).putExtra("params", params))
+        }
+
+        @JavascriptInterface fun stop() = runOnUiThread {
+            startService(Intent(this@MainActivity, ProcessService::class.java).setAction(ProcessService.ACTION_STOP))
+        }
+
+        /** kind: "image" | "audio" | "folder"; kết quả -> window.__onPick(id, obj) */
+        @JavascriptInterface fun pick(kind: String, id: String) = runOnUiThread {
+            pendingPick = id
+            when (kind) {
+                "image" -> pickImage.launch("image/*")
+                "audio" -> pickAudio.launch(arrayOf("audio/*"))
+                "folder" -> pickFolder.launch(null)
+                else -> pendingPick = null
+            }
+        }
+
+        @JavascriptInterface fun toast(msg: String) = runOnUiThread { this@MainActivity.toast(msg) }
+        @JavascriptInterface fun checkUpdate() = runOnUiThread { Updater(this@MainActivity, lifecycleScope).check(silent = false) }
+        @JavascriptInterface fun reloadUi() = runOnUiThread {
+            lifecycleScope.launch {
+                val fresh = withContext(Dispatchers.IO) { UiStore.fetch(this@MainActivity, force = true) }
+                loadUi(fresh ?: UiStore.cachedOrBundled(this@MainActivity))
+            }
+        }
+    }
+}
+
+/** Giao diện web: bản trên GitHub (main) -> bản đã lưu -> bản đóng gói trong APK. */
+object UiStore {
+    const val UI_API = 1
+    const val URL_UI = "https://raw.githubusercontent.com/zenoue/Playlist_ytdl/main/web/index.html"
+    @Volatile var source = "đóng gói"
+
+    private fun file(ctx: Context) = File(ctx.filesDir, "web/index.html")
+    private fun ok(s: String) = s.contains("UI_API = $UI_API")
+
+    fun cachedOrBundled(ctx: Context): String {
+        val f = file(ctx)
+        if (f.exists()) runCatching { f.readText() }.getOrNull()?.takeIf(::ok)?.let { source = "bản lưu"; return it }
+        source = "đóng gói"
+        return ctx.assets.open("index.html").bufferedReader().readText()
+    }
+
+    /** Trả về HTML mới nếu khác bản đang có, ngược lại null. */
+    fun fetch(ctx: Context, force: Boolean = false): String? = try {
+        val c = URL("$URL_UI?t=${System.currentTimeMillis() / 60_000}").openConnection() as HttpURLConnection
+        c.connectTimeout = 5_000; c.readTimeout = 10_000
+        if (c.responseCode != 200) null else {
+            val html = c.inputStream.bufferedReader().readText()
+            val f = file(ctx)
+            if (!ok(html)) null
+            else if (!force && f.exists() && f.readText() == html) { source = "server"; null }
+            else { f.parentFile?.mkdirs(); f.writeText(html); source = "server"; html }
+        }
+    } catch (_: Exception) { null }
 }

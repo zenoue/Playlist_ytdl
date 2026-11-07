@@ -15,7 +15,7 @@ android {
         minSdk = 24
         targetSdk = 35
         versionCode = buildNumber
-        versionName = System.getenv("APP_VERSION") ?: "beta_dev"
+        versionName = project.property("appVersion") as String
     }
 
     // Keystore cố định (chỉ dùng cá nhân) để các bản build sau cài đè được lên bản trước.
@@ -53,7 +53,7 @@ android {
     }
 
     // Bản engine dự phòng đóng gói trong APK (khi không tải được bản mới từ server)
-    sourceSets["main"].assets.srcDir("../engine")
+    sourceSets["main"].assets.srcDirs("../engine", "../web")
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
