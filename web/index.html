@@ -9,7 +9,7 @@
   Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
   Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
 -->
-<script>const UI_API = 1, UI_VERSION = "1.3.0";</script>
+<script>const UI_API = 1, UI_VERSION = "1.4.0";</script>
 <style>
 :root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -73,7 +73,7 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
     <div class="f"><label>Tốc độ</label><input id="speed" inputmode="decimal"></div>
   </div>
   <div class="row">
-    <label class="chk" style="flex:1"><input type="checkbox" id="removeAds">Xoá quảng cáo lặp lại</label>
+    <label class="chk" style="flex:1"><input type="checkbox" id="removeAds">Tự tìm quảng cáo lặp lại</label>
     <span class="small">Định dạng</span>
     <select id="format"><option value="m4a">M4A (AAC)</option><option value="mp3">MP3</option></select>
   </div>
@@ -82,6 +82,22 @@ summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{c
     <label class="chk" style="flex:1"><input type="checkbox" id="copyMode">Không mã hoá</label>
     <span class="small" id="coverLbl">Ảnh bìa</span><div class="thumb" id="cover"></div><button class="x hide" id="coverClr">✕</button>
   </div>
+  <details id="adBox">
+    <summary>Mẫu quảng cáo (lọc bằng so sánh sóng) <span id="adCount" class="small"></span></summary>
+    <div id="adList"></div>
+    <div class="small" style="margin-top:6px">Thêm mẫu: chọn file có đoạn quảng cáo, nhập thời điểm bắt đầu – kết thúc của đoạn đó.</div>
+    <div class="row"><button class="btn2" id="adPick" style="flex:1">Chọn file chứa quảng cáo</button></div>
+    <div class="small" id="adFile" style="margin-top:4px"></div>
+    <div class="row">
+      <div class="f"><label>Từ (m:ss)</label><input id="adFrom" placeholder="13:38"></div>
+      <div class="f"><label>Đến (m:ss)</label><input id="adTo" placeholder="13:47"></div>
+      <div class="f"><label>File đã tăng tốc ×</label><input id="adSpeed" inputmode="decimal" value="1"></div>
+    </div>
+    <div class="row"><div class="f"><label>Tên mẫu</label><input id="adLabel" class="l" placeholder="vd: truyendocviet"></div></div>
+    <div class="help">Nếu cắt từ file app đã xuất (đã tăng tốc) thì nhập tốc độ đã dùng (vd 1.25) để app đưa mẫu về tốc độ gốc.
+      Khi tải, mọi chỗ có dạng sóng khớp mẫu ≥ 85% sẽ bị cắt đúng bằng độ dài mẫu.</div>
+    <div class="row"><button class="btn" id="adSave">Lưu mẫu</button></div>
+  </details>
   <details id="meta">
     <summary>Thông tin sách (metadata audiobook)</summary>
     <div class="row"><div class="f"><label>Tên sách → Album (dùng được biến, vd: {playlist} {phan})</label><input id="bookTpl" class="l" placeholder="{playlist}"></div></div>
@@ -133,7 +149,7 @@ const A = window.App || {   // chạy thử trên trình duyệt máy tính
 };
 const $ = id => document.getElementById(id);
 const P = Object.assign({url:"", from:"1", count:"10", group:"10", trimStart:"10", trimEnd:"30", speed:"1.25",
-  mono:true, copyMode:false, removeAds:true, format:"m4a", cover:"", coverPreview:"", saveTree:"", saveLabel:""}, JSON.parse(A.prefGet("ui") || "{}"));
+  mono:true, copyMode:false, removeAds:true, format:"m4a", ads:[], cover:"", coverPreview:"", saveTree:"", saveLabel:""}, JSON.parse(A.prefGet("ui") || "{}"));
 const save = () => A.prefSet("ui", JSON.stringify(P));
 let running = false;
 
@@ -152,6 +168,30 @@ $("tabTag").onclick = () => { if (!$("tagLink").value) $("tagLink").value = P.ur
 for (const k of ["url","from","count","group","trimStart","trimEnd","speed"]) {
   $(k).value = P[k]; $(k).oninput = () => { P[k] = $(k).value.trim(); save(); };
 }
+// ---- mẫu quảng cáo (engine mode "addAd" cắt + lưu mẫu vào thư viện của app)
+let adSrc = null;
+function showAds(){
+  $("adCount").textContent = P.ads.length ? "· " + P.ads.length + " mẫu" : "";
+  $("adList").innerHTML = "";
+  P.ads.forEach((a, i) => {
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = `<span style="flex:1">🔇 ${a.label.replace(/</g,"&lt;")} <span class="small">${a.info || ""}</span></span><button class="x">✕</button>`;
+    row.querySelector("button").onclick = () => { P.ads.splice(i, 1); save(); showAds(); };
+    $("adList").appendChild(row);
+  });
+}
+$("adPick").onclick = () => !running && pick("audio", r => { adSrc = r; $("adFile").textContent = r.name; });
+$("adSave").onclick = () => {
+  if (running) return;
+  if (!adSrc) return A.toast("Chọn file chứa quảng cáo trước");
+  const a = secs($("adFrom").value), b = secs($("adTo").value), sp = parseFloat(($("adSpeed").value || "1").replace(",", ".")) || 1;
+  if (!(b > a + 2)) return A.toast("Đoạn mẫu phải dài hơn 2 giây (Đến > Từ)");
+  const id = "ad" + Date.now(), label = $("adLabel").value.trim() || ("Mẫu " + (P.ads.length + 1));
+  P.ads.push({id, label, info: `${$("adFrom").value}–${$("adTo").value}` + (sp !== 1 ? ` · ×${sp}` : "")}); save(); showAds();
+  A.run(JSON.stringify({mode:"addAd", input:adSrc.path, start:a, end:b, sampleSpeed:sp, id, label}));
+};
+showAds();
+
 // ---- thông tin sách (Tên sách -> album, Tác giả -> album_artist + artist, Thể loại -> genre)
 const META = ["bookTpl","authorTpl","genre","nameTpl"];
 if (P.albumTpl && !P.bookTpl) P.bookTpl = P.albumTpl;      // chuyển cài đặt cũ (UI 1.1)
@@ -186,7 +226,7 @@ $("saveClr").onclick = () => { P.saveTree = ""; P.saveLabel = ""; save(); showSa
 function sync(){ // "Không mã hoá" -> tốc độ / mono không áp dụng (chỉnh tốc độ trong app nghe)
   $("speed").disabled = $("mono").disabled = P.copyMode || running;
   $("format").disabled = P.copyMode || running;
-  for (const id of ["url","from","count","group","trimStart","trimEnd","copyMode","removeAds","tagRun","tagPick",
+  for (const id of ["url","from","count","group","trimStart","trimEnd","copyMode","removeAds","tagRun","tagPick","adPick","adSave",
     "bookTpl","authorTpl","genre","nameTpl"]) $(id).disabled = running;
   $("run").textContent = running ? "Dừng" : "Bắt đầu"; $("run").classList.toggle("stop", running);
 }
@@ -201,7 +241,7 @@ $("run").onclick = () => {
     group:Math.max(1, parseInt(P.group)||10), trimStart:secs(P.trimStart), trimEnd:secs(P.trimEnd), speed:speed||1,
     mono:!!P.mono, copyMode:!!P.copyMode, cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || "Download/PlaylistAudio",
     nameTpl:P.nameTpl || "", bookTpl:P.bookTpl || "", authorTpl:P.authorTpl || "", genre:P.genre || "",
-    removeAds:!!P.removeAds, format:P.format || "m4a" }));
+    removeAds:!!P.removeAds, format:P.format || "m4a", adIds:P.ads.map(a => a.id) }));
 };
 
 // ---- tab sửa tag

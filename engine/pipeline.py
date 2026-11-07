@@ -16,7 +16,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
   mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
 """
 ENGINE_API = 2          # app 1.x chạy engine API 2 (tham số từ giao diện chuyển thẳng sang engine)
-ENGINE_VERSION = "1.3.0"
+ENGINE_VERSION = "1.4.0"
 
 import collections
 import hashlib
@@ -492,8 +492,9 @@ class _Rep:
         end = min(len(c4), region[1] // 4) if region else len(c4)
         occ = []; last = -10**9
         while j + mc <= end:
+            # lọc thô; quét theo mẫu cho phép lỏng hơn (mẫu có thể đã qua đổi tốc độ), bước sau vẫn kiểm tra cả đoạn ≥ 0.8
             if abs(j - k0) * 4 > self.gap and j - last > mc and _corr(head, c4[j:j+h]) > 0.6 \
-                    and _corr(core, c4[j:j+mc]) > 0.8:
+                    and _corr(core, c4[j:j+mc]) > (0.65 if region else 0.8):
                 r, o = self.refine(k0 * 4, (j - k0) * 4)
                 if r > 0.8:
                     if region:
@@ -517,21 +518,62 @@ class _Rep:
         return (a2, b2) if b2 - a2 > (b - a) // 2 else (a, b)
 
 
+def ads_dir():
+    """Thư viện mẫu quảng cáo (lưu lâu dài cạnh cache yt-dlp, không bị dọn khi chạy)."""
+    d = os.path.join(os.path.dirname(P["cache"].rstrip("/")), "ads")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def add_ad_mode():
+    """Cắt 1 đoạn quảng cáo từ file người dùng chọn -> lưu làm mẫu. Nếu cắt từ file đã tăng tốc thì
+    trả về tốc độ gốc (atempo nghịch) để so được với video mới tải (tốc độ 1.0)."""
+    src = P["input"]; aid = re.sub(r"[^\w-]", "", str(P.get("id") or int(time.time())))
+    ss, to = float(P.get("start") or 0), float(P.get("end") or 0)
+    sp = float(P.get("sampleSpeed") or 1) or 1.0
+    if to <= ss:
+        raise RuntimeError("Đoạn mẫu không hợp lệ (đến phải lớn hơn từ)")
+    out = os.path.join(ads_dir(), aid + ".m4a")
+    af = ["-af", atempo(1.0 / sp)] if abs(sp - 1) > 0.01 else []
+    ffmpeg(["-ss", "%.3f" % ss, "-to", "%.3f" % to, "-i", src, "-vn", *af, "-ac", "1", "-ar", "16000",
+            "-c:a", "aac", "-b:a", "48k", out])
+    dur = probe(out)[0]
+    if dur < 2:
+        os.remove(out)
+        raise RuntimeError("Mẫu quá ngắn (cần ≥ 2 giây)")
+    log("Đã lưu mẫu quảng cáo \"%s\": %.1f giây%s" % (P.get("label") or aid, dur,
+        " (đã đưa về tốc độ gốc từ ×%g)" % sp if af else ""))
+    progress(1.0)
+
+
 def find_ads(vids):
-    """vids: danh sách video (có path, duration). Gắn r["cuts"] = [(giây_đầu, giây_cuối)] theo thời gian file gốc."""
+    """vids: danh sách video (có path, duration). Gắn r["cuts"] = [(giây_đầu, giây_cuối)] theo thời gian file gốc.
+    Mẫu = các đoạn quảng cáo người dùng đã lưu (so sánh dạng sóng năng lượng) + mẫu tự tìm (nếu bật)."""
     t0 = time.time()
-    status("Tìm quảng cáo lặp lại…")
+    status("Tìm quảng cáo…")
     ranges = [(P["trimStart"], r["duration"] - P["trimEnd"]) for r in vids]
     with ThreadPoolExecutor(max_workers=CORES) as ex:
         envs = list(ex.map(lambda x: envelope(x[0]["path"], *x[1]), zip(vids, ranges)))
     check_cancel()
     SEP = [-70.0] * 64
-    # 1) tìm mẫu trên tối đa 6 video đầu (đủ nhiều lần lặp, chạy nhanh)
+    temps = []; covered = []
+    # 0) mẫu người dùng đã cắt sẵn (chính xác nhất: quảng cáo giống y hệt nhau)
+    for aid in P.get("adIds") or []:
+        f = os.path.join(ads_dir(), re.sub(r"[^\w-]", "", str(aid)) + ".m4a")
+        if not os.path.exists(f):
+            log("Không thấy mẫu quảng cáo %s (đã xoá?) — bỏ qua" % aid); continue
+        ev = envelope(f, 0, 3600)
+        while ev and ev[0] < -62: ev.pop(0)          # bỏ khoảng lặng 2 đầu mẫu
+        while ev and ev[-1] < -62: ev.pop()
+        if len(ev) * AHOP >= 2: temps.append(ev)
+    n_user = len(temps)
+    if not P.get("removeAds", True) and not temps:
+        return 0
+    # 1) tự tìm mẫu trên tối đa 6 video đầu (đủ nhiều lần lặp, chạy nhanh)
     disc = []
     for ev in envs[:6]: disc += ev + SEP
     rp = _Rep(disc)
-    temps = []; covered = []
-    for a, b in rp.discover():
+    for a, b in (rp.discover() if P.get("removeAds", True) else []):
         if any(a < y and b > x for x, y in covered):   # cùng 1 quảng cáo đã có mẫu -> bỏ mẫu trùng
             continue
         occ = [(a, b)] + rp.scan(a, b)
@@ -541,7 +583,8 @@ def find_ads(vids):
     if not temps:
         log("Không thấy đoạn lặp lại nào (%.1fs)" % secs(t0))
         return 0
-    log("Mẫu quảng cáo: %s" % ", ".join("%.1fs" % (len(t) * AHOP) for t in temps))
+    log("Mẫu quảng cáo: %s" % ", ".join(("%.1fs" + (" (mẫu đã lưu)" if i < n_user else " (tự tìm)")) % (len(t) * AHOP)
+                                       for i, t in enumerate(temps)))
     # 2) quét từng video: đặt các mẫu ngay trước đường năng lượng của video rồi tìm chỗ khớp
     total = 0.0
     for r, ev, (ss, to) in zip(vids, envs, ranges):
@@ -554,7 +597,8 @@ def find_ads(vids):
         cuts = []
         for a, b in pos:
             for x, y in rp.scan(a, b, region=(base, len(arr))):
-                x, y = rp.snap(x, y)
+                if not (pos.index((a, b)) < n_user):  # mẫu tự tìm: đặt mép vào khoảng lặng; mẫu người dùng: cắt đúng độ dài mẫu
+                    x, y = rp.snap(x, y)
                 cuts.append((ss + (x - base) * AHOP, ss + (y - base) * AHOP))
         cuts.sort(); merged = []
         for x, y in cuts:
@@ -697,7 +741,7 @@ def main():
     if not valid:
         raise RuntimeError("Không còn video nào sau khi cắt")
 
-    if P.get("removeAds", True):
+    if P.get("removeAds", True) or P.get("adIds"):
         try:
             find_ads(valid)
         except Cancelled:
@@ -846,7 +890,7 @@ def tag_mode():
 
 if __name__ == "__main__":
     try:
-        tag_mode() if P.get("mode") == "tag" else main()
+        {"tag": tag_mode, "addAd": add_ad_mode}.get(P.get("mode"), main)()
     except Cancelled:
         emit("ERROR", "Đã dừng")
         sys.exit(130)
