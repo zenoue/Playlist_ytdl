@@ -9,7 +9,7 @@
   Sửa file này + push lên nhánh main là app đổi giao diện, không cần build lại APK.
   Cầu nối với app: window.App (xem MainActivity.Bridge) và các hàm window.__on* app gọi ngược.
 -->
-<script>const UI_API = 1, UI_VERSION = "1.0.0";</script>
+<script>const UI_API = 1, UI_VERSION = "1.1.0";</script>
 <style>
 :root{--bg:#000;--card:#121212;--line:#2a2a2a;--text:#e6e6e6;--dim:#8a8a8a;--acc:#e53935;--acc2:#3a0d0d}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -46,6 +46,12 @@ button:disabled,input:disabled{opacity:.4}
 .radio{display:flex;gap:12px;font-size:13px;margin-top:6px}
 .radio label{display:flex;gap:4px;align-items:center}
 .radio input{accent-color:var(--acc)}
+details{margin-top:6px;border:1px solid var(--line);border-radius:8px;padding:0 8px}
+details[open]{padding-bottom:8px}
+summary{padding:8px 0;font-size:13px;color:var(--text);cursor:pointer;list-style:none}
+summary::before{content:"▸ ";color:var(--dim)} details[open] summary::before{content:"▾ "}
+.help{font-size:11px;color:var(--dim);margin-top:6px;line-height:1.5}
+.help code{color:#d0d0d0;background:#1a1a1a;padding:0 3px;border-radius:3px}
 </style>
 </head>
 <body>
@@ -70,6 +76,26 @@ button:disabled,input:disabled{opacity:.4}
     <label class="chk" style="flex:1"><input type="checkbox" id="copyMode">Không mã hoá</label>
     <span class="small" id="coverLbl">Ảnh bìa</span><div class="thumb" id="cover"></div><button class="x hide" id="coverClr">✕</button>
   </div>
+  <details id="meta">
+    <summary>Tên file &amp; thông tin (metadata) hàng loạt</summary>
+    <div class="row"><div class="f"><label>Tên file</label><input id="nameTpl" class="l" placeholder="{playlist}_{phan}_v{tu}-{den}"></div></div>
+    <div class="row"><div class="f"><label>Tên bài</label><input id="titleTpl" class="l" placeholder="{phan}. {ten}"></div></div>
+    <div class="row"><div class="f"><label>Album</label><input id="albumTpl" class="l" placeholder="{playlist}"></div></div>
+    <div class="row"><div class="f"><label>Tên kênh / nghệ sĩ</label><input id="artistTpl" class="l" placeholder="{kenh}"></div></div>
+    <div class="row">
+      <div class="f"><label>Thể loại</label><input id="genre" class="l" placeholder="Audiobook"></div>
+      <div class="f" style="flex:.6"><label>Năm</label><input id="year" inputmode="numeric"></div>
+      <div class="f" style="flex:.7"><label>Phần bắt đầu</label><input id="partStart" inputmode="numeric" placeholder="1"></div>
+    </div>
+    <div class="row"><div class="f"><label>Ghi chú (comment)</label><input id="comment" class="l"></div></div>
+    <div class="help">Để trống = mặc định (chữ mờ). Biến dùng được:
+      <code>{playlist}</code> tên playlist · <code>{kenh}</code> tên kênh · <code>{phan}</code> số phần (01, 02…) ·
+      <code>{tong}</code> tổng số phần · <code>{tu}</code>/<code>{den}</code> video đầu/cuối của phần ·
+      <code>{ten}</code> "tên video đầu → cuối" · <code>{ten_dau}</code> · <code>{ten_cuoi}</code> · <code>{ngay}</code> hôm nay
+      <div id="preview" style="margin-top:6px;color:#bbb"></div>
+    </div>
+    <div class="row"><button class="link" id="metaReset">Đặt lại mặc định</button></div>
+  </details>
   <div class="row"><span class="small" id="saveLbl" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"></span><button class="x hide" id="saveClr">✕</button><button class="link" id="savePick">Đổi thư mục</button></div>
   <div class="row"><button class="btn" id="run">Bắt đầu</button></div>
 </section>
@@ -124,6 +150,22 @@ $("tabTag").onclick = () => { if (!$("tagLink").value) $("tagLink").value = P.ur
 for (const k of ["url","from","count","group","trimStart","trimEnd","speed"]) {
   $(k).value = P[k]; $(k).oninput = () => { P[k] = $(k).value.trim(); save(); };
 }
+// ---- tên file & metadata hàng loạt
+const META = ["nameTpl","titleTpl","albumTpl","artistTpl","genre","year","partStart","comment"];
+function preview(){ // xem trước với dữ liệu mẫu
+  const kenh = (P.artistTpl || "{kenh}").replace(/\{kenh\}/g, "Tên kênh").replace(/\{playlist\}/g, "Tên playlist");
+  const v = {playlist:"Tên playlist", kenh, phan:String(parseInt(P.partStart)||1).padStart(2,"0"), tong:"5",
+    tu:P.from||1, den:(parseInt(P.from)||1) + (parseInt(P.group)||10) - 1, ten_dau:"Tập 1", ten_cuoi:"Tập 10",
+    ten:"Tập 1 → Tập 10", ngay:new Date().toISOString().slice(0,10)};
+  const r = t => t.replace(/\{(\w+)\}/g, (m, k) => k in v ? v[k] : m);
+  const ext = P.copyMode ? "m4a" : "mp3";
+  $("preview").textContent = "Ví dụ: " + r(P.nameTpl || $("nameTpl").placeholder) + "." + ext +
+    "  ·  Tên bài: " + r(P.titleTpl || $("titleTpl").placeholder) + "  ·  Kênh: " + r(P.artistTpl || $("artistTpl").placeholder);
+}
+for (const k of META) { $(k).value = P[k] || ""; $(k).oninput = () => { P[k] = $(k).value; save(); preview(); }; }
+$("metaReset").onclick = () => { for (const k of META) { $(k).value = P[k] = ""; } save(); preview(); };
+$("meta").ontoggle = preview;
+
 for (const k of ["mono","copyMode"]) { $(k).checked = !!P[k]; $(k).onchange = () => { P[k] = $(k).checked; save(); sync(); }; }
 $("urlClr").onclick = () => { $("url").value = P.url = ""; save(); };
 
@@ -138,7 +180,8 @@ $("saveClr").onclick = () => { P.saveTree = ""; P.saveLabel = ""; save(); showSa
 
 function sync(){ // "Không mã hoá" -> tốc độ / mono không áp dụng (chỉnh tốc độ trong app nghe)
   $("speed").disabled = $("mono").disabled = P.copyMode || running;
-  for (const id of ["url","from","count","group","trimStart","trimEnd","copyMode","tagRun","tagPick"]) $(id).disabled = running;
+  for (const id of ["url","from","count","group","trimStart","trimEnd","copyMode","tagRun","tagPick",
+    "nameTpl","titleTpl","albumTpl","artistTpl","genre","year","partStart","comment"]) $(id).disabled = running;
   $("run").textContent = running ? "Dừng" : "Bắt đầu"; $("run").classList.toggle("stop", running);
 }
 const secs = s => String(s||"0").trim().split(":").reduce((a,x) => a*60 + (parseFloat(x)||0), 0);
@@ -150,7 +193,9 @@ $("run").onclick = () => {
   if (!P.copyMode && !(speed >= 0.5 && speed <= 4)) return A.toast("Tốc độ nên trong khoảng 0.5 – 4");
   A.run(JSON.stringify({ mode:"playlist", url:P.url, from:parseInt(P.from)||1, count:parseInt(P.count)||0,
     group:Math.max(1, parseInt(P.group)||10), trimStart:secs(P.trimStart), trimEnd:secs(P.trimEnd), speed:speed||1,
-    mono:!!P.mono, copyMode:!!P.copyMode, cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || "Download/PlaylistAudio" }));
+    mono:!!P.mono, copyMode:!!P.copyMode, cover:P.cover || "", saveTree:P.saveTree, saveLabel:P.saveLabel || "Download/PlaylistAudio",
+    nameTpl:P.nameTpl || "", titleTpl:P.titleTpl || "", albumTpl:P.albumTpl || "", artistTpl:P.artistTpl || "",
+    genre:P.genre || "", year:P.year || "", partStart:parseInt(P.partStart) || 1, comment:P.comment || "" }));
 };
 
 // ---- tab sửa tag

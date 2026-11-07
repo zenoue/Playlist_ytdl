@@ -16,7 +16,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
   mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
 """
 ENGINE_API = 2          # app 1.x chạy engine API 2 (tham số từ giao diện chuyển thẳng sang engine)
-ENGINE_VERSION = "1.0.0"
+ENGINE_VERSION = "1.1.0"
 
 import hashlib
 import json
@@ -445,6 +445,27 @@ def speed_up(src, dur, wdir, g, ngroups):
     return out
 
 
+# ---------------------------------------------------------------- tên file + metadata hàng loạt
+DEFAULT_TPL = {
+    "nameTpl": "{playlist}_{phan}_v{tu}-{den}",   # tên file (không cần đuôi)
+    "titleTpl": "{phan}. {ten}",                   # tên bài
+    "albumTpl": "{playlist}",
+    "artistTpl": "{kenh}",                         # đổi tên kênh / nghệ sĩ
+}
+
+
+class _Keep(dict):
+    def __missing__(self, k):            # biến không có thì giữ nguyên "{k}"
+        return "{" + k + "}"
+
+
+def render(tpl, vals):
+    try:
+        return tpl.format_map(_Keep(vals))
+    except Exception:  # noqa: BLE001  (người dùng gõ sai ngoặc...)
+        return tpl
+
+
 def main():
     log("Engine %s · CPU %d nhân" % (ENGINE_VERSION, CORES))
     entries, meta = list_entries()
@@ -468,8 +489,15 @@ def main():
         raise RuntimeError("Không còn video nào sau khi cắt")
 
     groups = [valid[i:i + P["group"]] for i in range(0, len(valid), P["group"])]
-    width = max(2, len(str(len(groups))))
-    base = sanitize(meta["title"] or entries[0]["title"])[:60]
+    start = int(P_get("partStart", 1))                # đánh số phần bắt đầu từ
+    width = max(2, len(str(len(groups) + start - 1)))
+    tpl = {k: (P_get(k) or d) for k, d in DEFAULT_TPL.items()}
+    playlist = meta["title"] or entries[0]["title"]
+    channel = meta["uploader"] or playlist
+    last_part = len(groups) + start - 1
+    # đổi tên kênh: áp dụng cho cả biến {kenh} trong tên file / tên bài / album
+    channel = render(tpl["artistTpl"], {"kenh": channel, "playlist": playlist}) or channel
+    today = time.strftime("%Y-%m-%d")
     os.makedirs(P["out"], exist_ok=True)
 
     for g, vids in enumerate(groups):
@@ -497,16 +525,29 @@ def main():
         audio = joined if P["copyMode"] else speed_up(joined, jdur, wdir, g, len(groups))
 
         # 3) Ảnh bìa + thông tin (copy)
-        name = "%s_%0*d_v%d-%d.%s" % (base, width, g + 1, first["index"], last["index"], ext)
+        part = g + start
+        vals = {"playlist": playlist, "kenh": channel, "phan": "%0*d" % (width, part), "so": part,
+                "tong": last_part, "tu": first["index"], "den": last["index"],
+                "ten_dau": first["title"], "ten_cuoi": last["title"],
+                "ten": first["title"] + (" → " + last["title"] if len(vids) > 1 else ""),
+                "ngay": today, "ext": ext}
+        name = sanitize(render(tpl["nameTpl"], vals))[:150]
+        if not name.lower().endswith("." + ext):
+            name += "." + ext
         out = os.path.join(P["out"], "final_%d.%s" % (g, ext))
         cover = None if ext in ("opus", "mka") else make_cover(wdir, first["index"])
-        album = meta["title"] or first["title"]
+        album = render(tpl["albumTpl"], vals)
         args = ["-i", audio]
         args += ["-i", cover, "-map", "0:a", "-map", "1:v"] if cover else ["-map", "0:a"]
         args += ["-c", "copy"] + (["-id3v2_version", "3"] if ext == "mp3" else [])
-        title = "%0*d. %s" % (width, g + 1, first["title"]) + (" → " + last["title"] if len(vids) > 1 else "")
-        for k, v in (("title", title), ("album", album), ("artist", meta["uploader"] or album),
-                     ("track", "%d/%d" % (g + 1, len(groups))), ("genre", "Audiobook")):
+        title = render(tpl["titleTpl"], vals)
+        tags = [("title", title), ("album", album), ("artist", channel), ("album_artist", channel),
+                ("track", "%d/%d" % (part, last_part)), ("genre", P_get("genre", "Audiobook"))]
+        if P_get("year"):
+            tags.append(("date", str(P_get("year"))))
+        if P_get("comment"):
+            tags.append(("comment", render(str(P_get("comment")), vals)))
+        for k, v in tags:
             args += ["-metadata", "%s=%s" % (k, v)]
         if cover:
             args += ["-disposition:v", "attached_pic", "-metadata:s:v", "title=Album cover",
