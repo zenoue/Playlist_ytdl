@@ -16,8 +16,9 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
   mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
 """
 ENGINE_API = 2          # app 1.x chạy engine API 2 (tham số từ giao diện chuyển thẳng sang engine)
-ENGINE_VERSION = "1.2.0"
+ENGINE_VERSION = "1.3.0"
 
+import collections
 import hashlib
 import json
 import math
@@ -381,6 +382,206 @@ def download_all(entries, wdir):
     return ok
 
 
+# ---------------------------------------------------------------- xoá quảng cáo lặp lại
+# Kênh truyện audio hay chèn cùng 1 đoạn thu sẵn (câu quảng bá, quảng cáo) nhiều lần trong mọi video.
+# Cách tìm (Python thuần, không cần numpy): đường năng lượng dB mỗi 32 ms -> băm khoảng cách giữa các đỉnh
+# âm tiết + bỏ phiếu độ lệch để tìm MẪU lặp (≥3 lần) -> quét từng video theo mẫu -> cắt khi ghép (copy).
+AHOP = 0.032
+
+
+def envelope(path, ss, to):
+    """Mức năng lượng (dB) mỗi khung 32 ms của đoạn [ss, to] (giây) trong file."""
+    r = subprocess.run([P["ffmpeg"], "-v", "error", "-ss", "%.3f" % ss, "-to", "%.3f" % to, "-i", path, "-af",
+                        "aresample=8000,asetnsamples=n=256:p=0,astats=metadata=1:reset=1:measure_perchannel=none:"
+                        "measure_overall=RMS_level,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+                        "-f", "null", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+    return [max(-70.0, float(x)) if x not in ("-inf", "inf") else -70.0
+            for x in re.findall(r"RMS_level=(\S+)", r.stdout)]
+
+
+def _corr(x, y):
+    n = len(x)
+    if n < 8 or len(y) != n: return 0.0
+    mx = sum(x) / n; my = sum(y) / n; sxy = sx = sy = 0.0
+    for p, q in zip(x, y):
+        p -= mx; q -= my; sxy += p * q; sx += p * p; sy += q * q
+    return sxy / math.sqrt(sx * sy + 1e-9)
+
+
+class _Rep:
+    def __init__(self, e, gap_s=15.0, min_len=4.0, max_len=150.0):
+        self.e = e; self.n = len(e); self.gap = int(gap_s / AHOP); self.min_len = min_len; self.max_len = max_len
+
+    def C(self, a, b, m):
+        e, n = self.e, self.n
+        if a < 0 or b < 0 or a + m > n or b + m > n: return 0.0
+        return _corr(e[a:a+m], e[b:b+m])
+
+    def md(self, i, off):           # trung bình |chênh dB| trên 0.5 s
+        e, n = self.e, self.n
+        if i < 0 or i + off < 0 or i + 16 + off > n or i + 16 > n: return 99
+        return sum(abs(e[i+k] - e[i+k+off]) for k in range(16)) / 16
+
+    def refine(self, a, off, w=48):
+        return max(((self.C(a, a + off + d, w), off + d) for d in range(-6, 7)))
+
+    def grow(self, a, off):
+        e = self.e; lo = hi = a
+        while self.md(lo - 16, off) < 8: lo -= 2
+        while self.md(hi, off) < 8: hi += 2
+        hi += 16
+        while hi > lo and abs(e[hi-1] - e[hi-1+off]) > 6: hi -= 1      # gọt mép theo từng khung
+        while lo < hi and abs(e[lo] - e[lo+off]) > 6: lo += 1
+        if not (self.min_len <= (hi - lo) * AHOP <= self.max_len): return None
+        if self.C(lo, lo + off, hi - lo) < 0.85: return None             # kiểm tra trên CẢ đoạn
+        return lo, hi
+
+    def discover(self):
+        """Tìm các mẫu lặp. Trả về [(a, b)] theo khung."""
+        e, n = self.e, self.n
+        s = [(e[max(0, i-1)] + e[i] + e[min(n-1, i+1)]) / 3 for i in range(n)]
+        peaks = [i for i in range(8, n-8) if s[i] > -42 and s[i] == max(s[i-4:i+5]) and s[i] - min(s[i-8:i+9]) > 4]
+        buckets = collections.defaultdict(list)
+        for k in range(len(peaks) - 3):
+            ks = set()
+            for (i1, i2, i3) in ((k, k+1, k+2), (k, k+1, k+3), (k, k+2, k+3)):   # chịu mất 1 đỉnh
+                d1 = (peaks[i2] - peaks[i1]) / 3; d2 = (peaks[i3] - peaks[i2]) / 3
+                for q1 in {math.floor(d1), math.ceil(d1)}:                       # chịu lệch ±1 khung
+                    for q2 in {math.floor(d2), math.ceil(d2)}:
+                        ks.add((q1, q2))
+            for key in ks: buckets[key].append(peaks[k])
+        votes = collections.Counter()
+        for ps in buckets.values():
+            if len(ps) > 60: continue
+            for i in range(len(ps)):
+                for j in range(i + 1, len(ps)):
+                    if ps[j] - ps[i] > self.gap: votes[((ps[j] - ps[i]) // 4, ps[i] // 31)] += 1
+        by_off = collections.defaultdict(list)
+        for (off, reg), v in votes.items(): by_off[off].append((reg, v))
+        tps = []
+        for off, regs in by_off.items():
+            regs.sort(); run = []
+            for reg, v in regs + [(10**9, 0)]:
+                if run and reg - run[-1][0] > 3:
+                    if sum(x[1] for x in run) >= 3:
+                        c = (run[0][0] + run[-1][0] + 1) * 31 // 2
+                        r, o = self.refine(c - 24, off * 4)
+                        if r >= 0.85:
+                            g = self.grow(c, o)
+                            if g: tps.append(g)
+                    run = []
+                run.append((reg, v))
+        tps.sort(); uniq = []
+        for a, b in tps:
+            if uniq and a < uniq[-1][1]:
+                if b - a > uniq[-1][1] - uniq[-1][0]: uniq[-1] = (a, b)
+                continue
+            uniq.append((a, b))
+        return uniq
+
+    def scan(self, a, b, region=None):
+        """Mọi chỗ khớp mẫu [a, b) (quét trên đường năng lượng thô 128 ms, so lõi giữa mẫu)."""
+        e, n = self.e, self.n
+        c4 = self._c4 if hasattr(self, "_c4") else [sum(e[i:i+4]) / 4 for i in range(0, n - 3, 4)]
+        self._c4 = c4
+        a4, b4 = a // 4, b // 4; m = b4 - a4
+        k0 = a4 + m // 4; core = c4[k0: a4 + 3 * m // 4]; mc = len(core)
+        if mc < 8: return []
+        h = min(10, mc); head = core[:h]
+        j = (region[0] // 4) if region else 0
+        end = min(len(c4), region[1] // 4) if region else len(c4)
+        occ = []; last = -10**9
+        while j + mc <= end:
+            if abs(j - k0) * 4 > self.gap and j - last > mc and _corr(head, c4[j:j+h]) > 0.6 \
+                    and _corr(core, c4[j:j+mc]) > 0.8:
+                r, o = self.refine(k0 * 4, (j - k0) * 4)
+                if r > 0.8:
+                    if region:
+                        # quét theo mẫu đã biết: dời nguyên mẫu (mép đã gọt) tới chỗ khớp, kiểm tra cả đoạn
+                        if self.C(a, a + o, b - a) > 0.8: occ.append((a + o, b + o)); last = j
+                    else:
+                        g = self.grow(k0 * 4 + mc * 2, o)
+                        if g: occ.append((g[0] + o, g[1] + o)); last = j
+            j += 1
+        return occ
+
+    def snap(self, a, b):
+        """Đặt điểm cắt vào khoảng lặng: đầu = chỗ lặng nhất gần mép, cuối = chỗ lặng SỚM NHẤT
+        (sau quảng cáo thường là câu "Chương N…" cùng giọng đọc, dễ bị tính lấn vào)."""
+        e, n = self.e, self.n
+        lo, hi = max(0, a - 6), min(n, a + 31)
+        a2 = min(range(lo, hi), key=lambda i: e[i]) if hi > lo else a
+        lo, hi = max(0, b - 56), min(n, b + 6)
+        fl = min(e[lo:hi]) if hi > lo else 0
+        b2 = next((i for i in range(lo, hi) if e[i] <= fl + 4), b - 1) + 1
+        return (a2, b2) if b2 - a2 > (b - a) // 2 else (a, b)
+
+
+def find_ads(vids):
+    """vids: danh sách video (có path, duration). Gắn r["cuts"] = [(giây_đầu, giây_cuối)] theo thời gian file gốc."""
+    t0 = time.time()
+    status("Tìm quảng cáo lặp lại…")
+    ranges = [(P["trimStart"], r["duration"] - P["trimEnd"]) for r in vids]
+    with ThreadPoolExecutor(max_workers=CORES) as ex:
+        envs = list(ex.map(lambda x: envelope(x[0]["path"], *x[1]), zip(vids, ranges)))
+    check_cancel()
+    SEP = [-70.0] * 64
+    # 1) tìm mẫu trên tối đa 6 video đầu (đủ nhiều lần lặp, chạy nhanh)
+    disc = []
+    for ev in envs[:6]: disc += ev + SEP
+    rp = _Rep(disc)
+    temps = []; covered = []
+    for a, b in rp.discover():
+        if any(a < y and b > x for x, y in covered):   # cùng 1 quảng cáo đã có mẫu -> bỏ mẫu trùng
+            continue
+        occ = [(a, b)] + rp.scan(a, b)
+        if len(occ) >= 3:                     # chỉ coi là quảng cáo nếu lặp ≥ 3 lần
+            temps.append(disc[a:b])           # chỉ lõi mẫu (mép đã gọt), không kèm phần xung quanh
+            covered += occ
+    if not temps:
+        log("Không thấy đoạn lặp lại nào (%.1fs)" % secs(t0))
+        return 0
+    log("Mẫu quảng cáo: %s" % ", ".join("%.1fs" % (len(t) * AHOP) for t in temps))
+    # 2) quét từng video: đặt các mẫu ngay trước đường năng lượng của video rồi tìm chỗ khớp
+    total = 0.0
+    for r, ev, (ss, to) in zip(vids, envs, ranges):
+        check_cancel()
+        pre = []; pos = []
+        for t in temps:
+            pre += SEP; pos.append((len(pre), len(pre) + len(t))); pre += t
+        pre += SEP
+        arr = pre + ev; rp = _Rep(arr); base = len(pre)
+        cuts = []
+        for a, b in pos:
+            for x, y in rp.scan(a, b, region=(base, len(arr))):
+                x, y = rp.snap(x, y)
+                cuts.append((ss + (x - base) * AHOP, ss + (y - base) * AHOP))
+        cuts.sort(); merged = []
+        for x, y in cuts:
+            if merged and x < merged[-1][1]:
+                # 2 mẫu cùng trúng 1 chỗ: giữ đoạn NGẮN hơn (thà sót chút quảng cáo còn hơn mất lời truyện)
+                if y - x < merged[-1][1] - merged[-1][0]: merged[-1] = (x, y)
+            else: merged.append((x, y))
+        r["cuts"] = merged
+        total += sum(y - x for x, y in merged)
+        if merged:
+            log("[%d] Xoá %d đoạn quảng cáo: %s" % (r["entry"]["n"] + 1, len(merged),
+                ", ".join("%d:%02d" % divmod(int(x), 60) for x, _ in merged)))
+    log("Xoá quảng cáo: tổng %.0fs trong %.1fs" % (total, secs(t0)))
+    return total
+
+
+def keep_parts(r):
+    """Các khoảng giữ lại (giây, theo file gốc) sau khi cắt đầu/cuối và bỏ quảng cáo."""
+    a, end = P["trimStart"], r["duration"] - P["trimEnd"]
+    out = []
+    for x, y in r.get("cuts", []):
+        if x > a + 0.05: out.append((a, x))
+        a = max(a, y)
+    if end > a + 0.05: out.append((a, end))
+    return out
+
+
 # ---------------------------------------------------------------- xử lý
 def keep_of(r):
     return r["duration"] - P["trimStart"] - P["trimEnd"]
@@ -417,9 +618,12 @@ def speed_up(src, dur, wdir, g, ngroups):
     t0 = time.time()
     last = [0.0]
     flt = ("aformat=channel_layouts=mono,aresample=24000," + atempo(P["speed"])) if P["mono"] else atempo(P["speed"])
-    br = "64k" if P["mono"] else "128k"
+    aac = P_get("format", "m4a") != "mp3"
+    br = ("64k" if P["mono"] else "128k") if not aac else ("64k" if P["mono"] else "128k")
+    xt = "m4a" if aac else "mp3"
+    codec = ["-c:a", "aac", "-b:a", br] if aac else ["-c:a", "libmp3lame", "-b:a", br, "-compression_level", "7"]
     status("Tăng tốc %.2fx: %.0f phút audio trên %d nhân…" % (P["speed"], dur / 60, n))
-    parts = [os.path.join(wdir, "sp_%d_%02d.mp3" % (g, i)) for i in range(n)]
+    parts = [os.path.join(wdir, "sp_%d_%02d.%s" % (g, i, xt)) for i in range(n)]
 
     def job(i):
         def on_t(s):
@@ -432,13 +636,13 @@ def speed_up(src, dur, wdir, g, ngroups):
                 status("Tăng tốc %d/%d: %.0f%% · %.0fx realtime · %d nhân" % (
                     g + 1, ngroups, 100 * d / total_out, d / max(secs(t0), 0.1), n))
         ffmpeg(["-threads", "1", "-ss", "%.3f" % (i * ln), "-t", "%.3f" % ln, "-i", src, "-vn", "-af", flt,
-                "-c:a", "libmp3lame", "-b:a", br, "-compression_level", "7", parts[i]], on_t)
+                *codec, parts[i]], on_t)
 
     with ThreadPoolExecutor(max_workers=n) as ex:
         list(ex.map(job, range(n)))
     lst = os.path.join(wdir, "sp_%d.txt" % g)
     open(lst, "w", encoding="utf-8").write("".join("file '%s'\n" % q(x) for x in parts))
-    out = os.path.join(wdir, "sped_%d.mp3" % g)
+    out = os.path.join(wdir, "sped_%d.%s" % (g, xt))
     ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", out])
     for x in parts: os.remove(x)
     log("Tăng tốc %.0f phút audio: %.1fs (%.0fx realtime)" % (total_out / 60, secs(t0), total_out / max(secs(t0), 0.1)))
@@ -493,6 +697,13 @@ def main():
     if not valid:
         raise RuntimeError("Không còn video nào sau khi cắt")
 
+    if P.get("removeAds", True):
+        try:
+            find_ads(valid)
+        except Cancelled:
+            raise
+        except Exception as e:  # noqa: BLE001
+            log("Bỏ qua bước xoá quảng cáo (lỗi: %s)" % short(e))
     groups = [valid[i:i + P["group"]] for i in range(0, len(valid), P["group"])]
     start = int(P_get("partStart", 1))                # đánh số phần bắt đầu từ
     width = max(2, len(str(len(groups) + start - 1)))
@@ -505,7 +716,6 @@ def main():
     last_part = len(groups) + start - 1
     base_vals = {"kenh": channel, "playlist": playlist}
     author = render(tpl["authorTpl"], base_vals) or channel
-    book = render(tpl["bookTpl"], dict(base_vals, tac_gia=author)) or playlist
     genre = P_get("genre", "Audiobook")
     today = time.strftime("%Y-%m-%d")
     os.makedirs(P["out"], exist_ok=True)
@@ -518,16 +728,17 @@ def main():
         status("Cắt + ghép %d/%d (không mã hoá)…" % (g + 1, len(groups)))
         lst = os.path.join(wdir, "concat_%d.txt" % g)
         open(lst, "w", encoding="utf-8").write("".join(
-            "file '%s'\ninpoint %.3f\noutpoint %.3f\n" % (q(r["path"]), P["trimStart"], r["duration"] - P["trimEnd"])
-            for r in vids))
+            "file '%s'\ninpoint %.3f\noutpoint %.3f\n" % (q(r["path"]), x, y)
+            for r in vids for x, y in keep_parts(r)))
         joined = os.path.join(wdir, "joined_%d.mka" % g)
         ffmpeg(["-f", "concat", "-safe", "0", "-i", lst, "-map", "0:a", "-c", "copy", joined])
-        jdur = sum(keep_of(r) for r in vids)
+        jdur = sum(y - x for r in vids for x, y in keep_parts(r))
         log("Ghép %d video (%.0f phút) không mã hoá: %.1fs" % (len(vids), jdur / 60, secs(tg)))
 
         # 2) Tốc độ: chỉ đổi được khi mã hoá lại; "Không mã hoá" thì giữ nguyên (chỉnh tốc độ trong app nghe)
         codec = probe(joined)[1]
-        if not P["copyMode"]: ext, mime = "mp3", "audio/mpeg"
+        fmt_out = P_get("format", "m4a")   # m4a (AAC) mặc định: hợp Bluetooth AAC; mp3 nếu cần tương thích cũ
+        if not P["copyMode"]: ext, mime = ("mp3", "audio/mpeg") if fmt_out == "mp3" else ("m4a", "audio/mp4")
         elif codec == "aac": ext, mime = "m4a", "audio/mp4"
         elif codec == "opus": ext, mime = "opus", "audio/ogg"
         elif codec == "mp3": ext, mime = "mp3", "audio/mpeg"
@@ -536,11 +747,14 @@ def main():
 
         # 3) Ảnh bìa + thông tin (copy)
         part = g + start
-        vals = {"playlist": playlist, "kenh": channel, "sach": book, "tac_gia": author, "the_loai": genre, "phan": "%0*d" % (width, part), "so": part,
+        vals = {"playlist": playlist, "kenh": channel, "tac_gia": author, "the_loai": genre, "phan": "%0*d" % (width, part), "so": part,
                 "tong": last_part, "tu": first["index"], "den": last["index"],
                 "ten_dau": first["title"], "ten_cuoi": last["title"],
                 "ten": first["title"] + (" → " + last["title"] if len(vids) > 1 else ""),
                 "ngay": today, "ext": ext}
+        # Tên sách dùng được mọi biến của phần ({phan}, {tu}, {den}, {ten_dau}…); tên file dùng được {sach}
+        book = render(tpl["bookTpl"], vals) or playlist
+        vals["sach"] = book
         name = sanitize(render(tpl["nameTpl"], vals))[:150]
         if not name.lower().endswith("." + ext):
             name += "." + ext
