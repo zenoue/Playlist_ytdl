@@ -16,7 +16,7 @@ Tham số: argv[1] = file JSON = tham số giao diện (web/index.html) gửi sa
   mode: "playlist" (mặc định) | "tag" (gắn ảnh bìa / thông tin cho file có sẵn)
 """
 ENGINE_API = 2          # app 1.x chạy engine API 2 (tham số từ giao diện chuyển thẳng sang engine)
-ENGINE_VERSION = "1.1.0"
+ENGINE_VERSION = "1.2.0"
 
 import hashlib
 import json
@@ -446,11 +446,16 @@ def speed_up(src, dur, wdir, g, ngroups):
 
 
 # ---------------------------------------------------------------- tên file + metadata hàng loạt
+# Audiobook không có chuẩn riêng -> mượn tag nhạc theo quy ước (beets-audible, Audiobookshelf):
+#   Tên sách -> album (ID3 TALB / MP4 ©alb)
+#   Tác giả  -> album_artist (TPE2 / aART) và artist (TPE1 / ©ART)
+#   Thể loại -> genre (TCON / ©gen)
+# Mỗi phần: title = "{phan}. {ten}", track = phần/tổng để trình phát xếp đúng thứ tự.
 DEFAULT_TPL = {
-    "nameTpl": "{playlist}_{phan}_v{tu}-{den}",   # tên file (không cần đuôi)
-    "titleTpl": "{phan}. {ten}",                   # tên bài
-    "albumTpl": "{playlist}",
-    "artistTpl": "{kenh}",                         # đổi tên kênh / nghệ sĩ
+    "nameTpl": "{sach}_{phan}_v{tu}-{den}",       # tên file (không cần đuôi)
+    "titleTpl": "{phan}. {ten}",                   # tên từng phần (TIT2)
+    "bookTpl": "{playlist}",                       # tên sách
+    "authorTpl": "{kenh}",                         # tác giả
 }
 
 
@@ -491,12 +496,17 @@ def main():
     groups = [valid[i:i + P["group"]] for i in range(0, len(valid), P["group"])]
     start = int(P_get("partStart", 1))                # đánh số phần bắt đầu từ
     width = max(2, len(str(len(groups) + start - 1)))
+    # tương thích tên tham số cũ (giao diện 1.1)
+    P.setdefault("bookTpl", P.get("albumTpl"))
+    P.setdefault("authorTpl", P.get("artistTpl"))
     tpl = {k: (P_get(k) or d) for k, d in DEFAULT_TPL.items()}
     playlist = meta["title"] or entries[0]["title"]
     channel = meta["uploader"] or playlist
     last_part = len(groups) + start - 1
-    # đổi tên kênh: áp dụng cho cả biến {kenh} trong tên file / tên bài / album
-    channel = render(tpl["artistTpl"], {"kenh": channel, "playlist": playlist}) or channel
+    base_vals = {"kenh": channel, "playlist": playlist}
+    author = render(tpl["authorTpl"], base_vals) or channel
+    book = render(tpl["bookTpl"], dict(base_vals, tac_gia=author)) or playlist
+    genre = P_get("genre", "Audiobook")
     today = time.strftime("%Y-%m-%d")
     os.makedirs(P["out"], exist_ok=True)
 
@@ -526,7 +536,7 @@ def main():
 
         # 3) Ảnh bìa + thông tin (copy)
         part = g + start
-        vals = {"playlist": playlist, "kenh": channel, "phan": "%0*d" % (width, part), "so": part,
+        vals = {"playlist": playlist, "kenh": channel, "sach": book, "tac_gia": author, "the_loai": genre, "phan": "%0*d" % (width, part), "so": part,
                 "tong": last_part, "tu": first["index"], "den": last["index"],
                 "ten_dau": first["title"], "ten_cuoi": last["title"],
                 "ten": first["title"] + (" → " + last["title"] if len(vids) > 1 else ""),
@@ -536,17 +546,12 @@ def main():
             name += "." + ext
         out = os.path.join(P["out"], "final_%d.%s" % (g, ext))
         cover = None if ext in ("opus", "mka") else make_cover(wdir, first["index"])
-        album = render(tpl["albumTpl"], vals)
         args = ["-i", audio]
         args += ["-i", cover, "-map", "0:a", "-map", "1:v"] if cover else ["-map", "0:a"]
         args += ["-c", "copy"] + (["-id3v2_version", "3"] if ext == "mp3" else [])
         title = render(tpl["titleTpl"], vals)
-        tags = [("title", title), ("album", album), ("artist", channel), ("album_artist", channel),
-                ("track", "%d/%d" % (part, last_part)), ("genre", P_get("genre", "Audiobook"))]
-        if P_get("year"):
-            tags.append(("date", str(P_get("year"))))
-        if P_get("comment"):
-            tags.append(("comment", render(str(P_get("comment")), vals)))
+        tags = [("title", title), ("album", book), ("album_artist", author), ("artist", author),
+                ("genre", genre), ("track", "%d/%d" % (part, last_part))]
         for k, v in tags:
             args += ["-metadata", "%s=%s" % (k, v)]
         if cover:
@@ -610,8 +615,11 @@ def tag_mode():
     args = ["-i", src]
     args += ["-i", cover, "-map", "0:a", "-map", "1:v"] if cover else ["-map", "0"]
     args += ["-c", "copy"] + (["-id3v2_version", "3"] if ext == "mp3" else [])
-    for k in ("title", "album", "artist", "track"):
-        args += ["-metadata", "%s=%s" % (k, P.get(k, ""))]
+    for k in ("title", "album", "artist", "track", "genre"):
+        if k in P:
+            args += ["-metadata", "%s=%s" % (k, P.get(k, ""))]
+    if "artist" in P:                     # tác giả -> cả album_artist (TPE2) theo quy ước audiobook
+        args += ["-metadata", "album_artist=%s" % P.get("artist", "")]
     if cover:
         args += ["-disposition:v", "attached_pic", "-metadata:s:v", "title=Album cover",
                  "-metadata:s:v", "comment=Cover (front)"]
